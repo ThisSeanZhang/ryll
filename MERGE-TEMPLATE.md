@@ -130,44 +130,98 @@ manipulated by adversarial content in the diff. If they
 find something, we take it seriously regardless of what the
 LLM passes say.
 
-Run these in parallel. Each reports to the management
-session; the management session collates findings.
+**Run Wave 0 locally, before CI, and treat it as the gate on
+CI rather than the other way round.** A pull request from a
+fork executes the contributor's code on our own self-hosted
+runners the moment CI is approved — see Step 7, which must
+be read before anything is approved. Wave 0 is what decides
+whether that approval is safe to give.
+
+Fetch the contributor's branch into our worktree first. The
+commands below assume this setup:
+
+```sh
+git remote add <contributor-remote> https://github.com/<handle>/ryll
+git fetch <contributor-remote>
+git switch -c pr<NN>-review <contributor-remote>/<branch>
+```
 
 | Check | Tool | Looks for |
 |-------|------|-----------|
-| Unicode safety | grep for bidi controls and zero-width chars | Trojan Source (CVE-2021-42574), homoglyph names |
-| Credential leaks | `gitleaks` or `trufflehog` on the diff | API keys, tokens, private keys |
-| Dependency advisories | `cargo audit` | Known-vulnerable crate versions |
-| Dependency policy | `cargo deny check` (if configured) | License changes, source-registry changes, new transitive pulls |
-| Prompt-injection shapes | grep for suspicious natural-language patterns in code/comments/fixtures | "ignore previous instructions", fenced code inside comments, `<\|.*?\|>` tags |
-| Build-script additions | `git diff develop...HEAD -- '**/build.rs' '**/Cargo.toml'` reviewed manually | New `build.rs` files, changed `[build-dependencies]`, new `links =` entries |
+| Unicode safety | `tools/check-bidi.sh` over the changed files | Trojan Source (CVE-2021-42574), homoglyph names |
+| Unicode in metadata | `grep` over the raw diff | the same codepoints in commit messages and removed lines, which the file scan does not see |
+| Credential leaks | `gitleaks`, via pre-commit | API keys, tokens, private keys |
+| Smuggled agent instructions | `skillsaw`, via pre-commit | malformed agent context, instructions aimed at an agent reading the repo |
+| Prompt-injection shapes | `grep` for suspicious natural-language patterns in code/comments/fixtures | "ignore previous instructions", fenced code inside comments, `<\|.*?\|>` tags |
+| Build-script additions | `git diff` over `build.rs`, `Cargo.toml`, `Cargo.lock`, reviewed by eye | new `build.rs` files, changed `[build-dependencies]`, new `links =` entries, unexplained new crates |
+| Lane changes | `git diff` over `.github/`, `tools/`, `scripts/`, `.devcontainer/`, reviewed by eye | a fork editing the workflow, script or image that will run its own code |
 
-Concrete commands (adapt paths/branch name as needed):
+Concrete commands, run from the review worktree with the
+contributor's branch checked out:
 
 ```sh
-# Unicode / bidi / zero-width
+# Unicode / bidi / zero-width in the changed files. check-bidi.sh
+# scans files, so it covers added and modified files but not the
+# commit messages or removed lines; the grep below covers those.
+git diff --name-only --diff-filter=ACMR develop...HEAD \
+  | xargs -r ./tools/check-bidi.sh
+
 git diff develop...HEAD | \
   grep -nP '[\x{202a}-\x{202e}\x{2066}-\x{2069}\x{200b}-\x{200f}\x{feff}]' \
-  || echo "No suspicious unicode."
+  || echo "No suspicious unicode in the diff itself."
 
 # Prompt-injection language (dumb but unfoolable)
 git diff develop...HEAD | \
   grep -inE 'ignore (all )?(previous|prior|above) (instructions|prompts)|disregard (previous|prior) (instructions|prompts)|system: *you are|you are now|new instructions:' \
   || echo "No prompt-injection shapes found."
 
-# Credentials
-gitleaks detect --no-banner --source . --log-opts 'develop..HEAD' \
-  || echo "gitleaks not installed — install or skip with rationale"
+# Credentials. Neither gitleaks nor skillsaw is installed on the
+# host; both come from .pre-commit-config.yaml, which pins the
+# versions CI uses, so pre-commit is the invocation rather than a
+# fallback for a missing binary.
+pre-commit run gitleaks --from-ref develop --to-ref HEAD
 
-# Rust advisories
-cargo audit
+# Smuggled instructions in the agent context (AGENTS.md and friends).
+pre-commit run skillsaw --all-files
 
-# Build scripts and build-deps — read these by eye
-git diff develop...HEAD -- '**/build.rs' '**/Cargo.toml'
+# Build scripts, dependencies and the lanes that build them —
+# read all of these by eye.
+git diff develop...HEAD -- '**/build.rs' '**/Cargo.toml' Cargo.lock
+git diff develop...HEAD -- .github/ tools/ scripts/ .devcontainer/
 ```
 
+`cargo audit` and `cargo deny` are deliberately absent from
+that list: neither is installed on the host and neither is
+baked into the devcontainer, so locally there is nothing to
+run. Both are PR-time CI jobs (`docs/ci.md`), and both read
+our dependency set rather than executing the contributor's
+code, so deferring them to CI costs nothing — the local
+substitute is the `Cargo.lock` review above, which is what
+would catch a hostile new dependency before CI is approved
+at all. If a local answer is ever needed before approval,
+add them to `.devcontainer/Dockerfile` rather than
+installing a native toolchain on the host.
+
+Where Wave 0 or the later waves need an actual build, use
+`make lint` and `make test` rather than a native `cargo`
+invocation. Those run in the devcontainer under
+`DOCKER_RUN_OFFLINE` — `--network none` with a read-only
+cargo cache — so a hostile `build.rs` in a new dependency
+has no egress and cannot poison the cache for later runs.
+The Makefile documents the reasoning.
+
 If any of these fail or surface something, stop and escalate
-to the operator before spending compute on the LLM waves.
+to the operator before spending compute on the LLM waves,
+and before approving CI.
+
+### What CI adds, and why it is not a substitute
+
+CI runs six scanners of its own on every pull request —
+`cargo audit`, `cargo deny`, `gitleaks`, `shellcheck`,
+`bidi-check` and `skillsaw` (`docs/ci.md`). They overlap
+Wave 0 by design. The overlap is not redundant: for a fork
+pull request, CI only runs once the operator approves it,
+and approving it is the act Wave 0 exists to inform.
 
 ### Known alternatives
 
@@ -433,6 +487,46 @@ and monitors it. If CI fails on something the assistant
 and sub-agents missed, return to Step 5 with the new
 finding.
 
+### Approving CI on a fork is a privileged act
+
+For a pull request from a fork, read this before clicking
+anything. Wave 0 and Wave 1 must be clear first.
+
+`ci.yml`'s `lint`, `build-linux` and `check-windows` jobs
+run on `[self-hosted, vm, ...]` and carry no fork guard,
+unlike `codeql-analysis.yml`, `mermaid-lint.yml` and
+`proxmox-functional.yml`, which do. The `vm` label means a
+conductor-provisioned ephemeral runner, and the conductor's
+cloud-init userdata writes two secrets onto every one of
+them at boot, owned by the same user the job steps run as:
+
+- `/srv/github/id_ci` — an unencrypted SSH private key,
+  which `proxmox-functional.yml` describes as the key to
+  every node in the CI mesh.
+- `~/.shakenfist` — API credentials for the runner's own
+  namespace on `sfcbr.shakenfist.com`.
+
+Ephemerality does not mitigate this. A fresh VM per job
+defeats persistence and cross-job contamination; it does
+not defeat theft, because both secrets are re-provisioned
+onto every fresh runner, and the runner has egress through
+the proxy. Any step in those three jobs — including a
+`build.rs` in a new dependency, a proc macro, or a test —
+can read both files and send them anywhere.
+
+So: a fork's code must not reach those lanes until its diff
+has been read. GitHub's "require approval for outside
+collaborators" setting, where enabled, does not change the
+analysis; it just means the exposure happens when the
+operator presses "Approve and run" rather than on push.
+
+Prefer local verification for a fork: `make lint` and
+`make test` run under `--network none` with a read-only
+cargo cache, which is stricter containment than the fleet
+offers. `can_enqueue`'s jq treats a skipped dependency as
+success, so a fork pull request whose self-hosted lanes are
+skipped can still be merged on local verification.
+
 ## Step 8: Merge and follow up
 
 Once CI passes and triage is complete:
@@ -486,8 +580,8 @@ Before declaring the merge process complete:
 - [ ] Step 0: teachy level recorded.
 - [ ] Step 0: `REVIEW-STATE.md` created in the worktree
       from the template.
-- [ ] Wave 0 deterministic scanners run and results
-      triaged.
+- [ ] Wave 0 deterministic scanners run locally and
+      results triaged, before any CI approval.
 - [ ] Wave 1 LLM safety review complete.
 - [ ] Wave 2 LLM quality review complete.
 - [ ] All findings classified (blocking / follow-up /
@@ -501,6 +595,8 @@ Before declaring the merge process complete:
 - [ ] `docs/plans/PLAN-prNN-followup.md` drafted and
       committed on our follow-up branch *before* merge.
 - [ ] `docs/plans/index.md` and `order.yml` updated.
+- [ ] For a fork: Step 7's fork section read, and Wave 0
+      and Wave 1 clear, before CI was approved.
 - [ ] Operator ran CI and it passed.
 - [ ] Operator merged the external PR.
 - [ ] Our follow-up PR opened immediately after.
