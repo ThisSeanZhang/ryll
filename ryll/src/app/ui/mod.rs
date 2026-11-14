@@ -1,5 +1,6 @@
 mod cursor;
 mod dialogs;
+mod keys;
 mod notifications_panel;
 mod region_select;
 mod stats_bar;
