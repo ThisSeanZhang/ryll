@@ -81,12 +81,12 @@ lines, of which `ui` is 1,691 (lines 1241-2931).
    | 1291-1364 | hotkeys: Esc, F12, F11, F8, Esc, Ctrl+Alt+V | ctx | `keys.rs` |
    | 1366-1379 | `handle_input`, held-key end of frame, screenshot dialog | ctx | `keys.rs` |
    | 1381-1390 | traffic-entry refresh | -- | `traffic_panel.rs` |
-   | 1392-1764 | status bar panel | ui | `stats_bar.rs` |
+   | 1392-1764 | status bar panel | ui, ctx | `stats_bar.rs` |
    | 1765-1855 | traffic viewer panel | ui | `traffic_panel.rs` |
    | 1857-2003 | notifications panel, then mark-all-read | ui | `notifications_panel.rs` |
    | 2005-2245 | USB panel, with its pre-draw polling | ui, ctx | `usb_panel.rs` |
    | 2247-2362 | WebDAV panel | ui, ctx | `webdav_panel.rs` |
-   | 2364-2512 | central panel: the surface | ui | `surface.rs` |
+   | 2364-2512 | central panel: the surface | ui, ctx | `surface.rs` |
    | 2514-2630 | bug report window | ctx | `dialogs.rs` |
    | 2632-2658 | paste error window | ctx | `dialogs.rs` |
    | 2660-2769 | region selection overlay | ctx | `region_select.rs` |
@@ -438,7 +438,7 @@ Commit subject: `Split the status bar into its own module.`
 ### Step 4c: the surface
 
 Move 2364-2512 to `app/ui/surface.rs` as
-`pub(in crate::app) fn draw_surface(&mut self, ui: &mut egui::Ui) -> SurfaceOutcome`,
+`pub(in crate::app) fn draw_surface(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> SurfaceOutcome`,
 where `SurfaceOutcome` is a `pub(in crate::app) struct` with the two
 `bool` fields decision 4 names. `panel_frame` (2367) moves inside.
 The follow-up at 2508-2512 -- opening the bug report dialog for a
@@ -707,7 +707,10 @@ Commit subject: `Bring every draw under the length lint.`
 
   names those two and nothing else, at 243/100 and 154/100. Run it
   through the devcontainer the way `make lint` does
-  (`DOCKER_RUN_OFFLINE`, after `make fetch`); the figures in survey
+  (`DOCKER_RUN_OFFLINE`, after `make fetch`), and `touch
+  ryll/src/main.rs` first: cargo replays cached diagnostics, so a
+  second run on a warm cache prints nothing and the check passes
+  vacuously; the figures in survey
   finding 9 come from running exactly this during planning. The
   implementer records the list in the execution notes.
 
@@ -801,6 +804,24 @@ would have failed for a reason outside the phase (survey finding
    and cursor by eye. This is the mitigation risk 1 asks for.
 3. This session may push and open the pull request, after that
    check.
+
+**Three cells of the inventory table's "Takes" column were
+wrong, all the same way.** The status bar, the WebDAV panel and the
+central panel each need `ctx` as well as `ui` -- for a repaint
+request, a texture lookup and an input read. The survey measured
+`ctx` use per block correctly; the error was in transcribing those
+measurements into the table and into three step briefs, where "the
+panels take `ui`" became a rule instead of a per-block fact. All
+three cells and the step 4c signature are corrected above, and the
+rule to draw from it is that the column is derived from the tree,
+not from the kind of egui widget a block uses.
+
+**The lint check needs a cold cache.** cargo replays cached
+diagnostics for a crate it considers fresh, so running the
+`-W clippy::too_many_lines` command twice prints the warnings the
+first time and nothing the second. Touch a file in the crate --
+`touch ryll/src/main.rs` -- before each run, or the check passes by
+printing nothing at all. The definition of done says so now.
 
 **Step 4a corrected the plan.** `draw_webdav_panel` needs
 `ctx: &egui::Context` as well as `ui`: its body calls
