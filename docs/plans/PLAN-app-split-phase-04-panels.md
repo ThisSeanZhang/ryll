@@ -85,7 +85,7 @@ lines, of which `ui` is 1,691 (lines 1241-2931).
    | 1765-1855 | traffic viewer panel | ui | `traffic_panel.rs` |
    | 1857-2003 | notifications panel, then mark-all-read | ui | `notifications_panel.rs` |
    | 2005-2245 | USB panel, with its pre-draw polling | ui, ctx | `usb_panel.rs` |
-   | 2247-2362 | WebDAV panel | ui | `webdav_panel.rs` |
+   | 2247-2362 | WebDAV panel | ui, ctx | `webdav_panel.rs` |
    | 2364-2512 | central panel: the surface | ui | `surface.rs` |
    | 2514-2630 | bug report window | ctx | `dialogs.rs` |
    | 2632-2658 | paste error window | ctx | `dialogs.rs` |
@@ -391,8 +391,9 @@ a single call at the point the block was:
   only runs when `show_usb_panel`, so it is part of the same block.
 * 2247-2362 to `webdav_panel.rs` as `draw_webdav_panel`.
 
-All four take `ui: &mut egui::Ui`; `draw_usb_panel` also takes
-`ctx: &egui::Context` for its `request_repaint_after`. The `if
+All four take `ui: &mut egui::Ui`; `draw_usb_panel` and
+`draw_webdav_panel` also take `ctx: &egui::Context`, each for a
+`request_repaint_after`. The `if
 self.show_* {` test moves inside the method rather than staying at
 the call site, so `ui` reads as an unconditional sequence. Import
 explicitly (`use crate::app::RyllApp;` and the types each file
@@ -744,6 +745,44 @@ Commit subject: `Reduce ui to its draw sequence.`
   at all (phase 3 recorded the same gap for its two edited paths).
   Risk 1 says what is done instead. If a manual run against the
   desktop test guest is wanted, the back brief asks for it.
+
+## Execution notes
+
+Implementation began 2026-11-14 (AEDT), in
+`../ryll-wt-app-p04` on `app-split-phase-04-panels`.
+
+**Rebased before starting.** The branch was planned on `32d8b22`
+and rebased onto `da0e593`, which carries #723. Without that fix
+`make lint` cannot pass on rustc 1.100.0, so every step's checks
+would have failed for a reason outside the phase (survey finding
+12). #722 is closed.
+
+**Back brief answers.**
+
+1. The module shape is as planned: nested `app/ui/`, `ui` stays in
+   `app/mod.rs`, and the draw methods are `pub(in crate::app)`
+   (decisions 1-3). The two alternatives offered -- flat
+   `app/ui_*.rs` files keeping `pub(super)`, and moving the whole
+   `impl eframe::App` block into `app/ui/mod.rs` -- were declined.
+2. A manual run against the desktop test guest is wanted before
+   the pull request. The phase therefore stops after step 4g with
+   the branch built, for the operator to check the panels, dialogs
+   and cursor by eye. This is the mitigation risk 1 asks for.
+3. This session may push and open the pull request, after that
+   check.
+
+**Step 4a corrected the plan.** `draw_webdav_panel` needs
+`ctx: &egui::Context` as well as `ui`: its body calls
+`ctx.request_repaint_after`. Survey finding 1's inventory table and
+the step 4a brief both said `ui` alone, which is wrong and would
+not compile; both are corrected above. The survey's own
+measurements had it right, so this was a transcription error in the
+plan rather than a wrong reading of the tree.
+
+`app/mod.rs` also loses four imports in step 4a -- `format_size`,
+`TrafficDirection`, `usb::{self, DeviceSource}` -- because their
+only users moved. That is not a body edit; clippy denies unused
+imports, so the step could not have left them.
 
 ## Back brief
 
