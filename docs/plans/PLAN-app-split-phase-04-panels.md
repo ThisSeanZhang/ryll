@@ -848,6 +848,37 @@ definition of done stands as written.
 only users moved. That is not a body edit; clippy denies unused
 imports, so the step could not have left them.
 
+Rebased onto `develop` at 8381d96 on 2026-11-15 (AEDT), after
+session-relay reported #726 CONFLICTING: #718
+(session-follows-server) and #725 (input accounting) landed while
+the pull request was open. One conflict, in `app/mod.rs`, from the
+one file both sides changed. #718 added a `ModalVariant::ServerEnded`
+arm and wrapped the modal body in a `ScrollArea` -- inside the
+reconnect modal that step 4d had already moved to
+`app/ui/dialogs.rs`. Resolved by taking the move in `mod.rs` and
+porting both additions onto the moved copy, with
+`server_ended_body` imported there instead; `mod.rs` keeps only
+`forbid_retry_modal` and `ReconnectState` from `reconnect`. The
+resolution sits in 4d's own commit, so the moved body still matches
+the base line for line: 70 lines either side of the move, nothing
+lost and nothing added.
+
+That rebase also breaks one definition-of-done item, and not
+because of this phase: no file under `ryll/src/app/` except
+`mod.rs` may exceed 800 lines, and `reconnect.rs` is now 881 on
+`develop` itself, where #718 added 350 lines to it. Phase 4 never
+touches that file. Recorded here rather than ticked, relaxed or
+swept into this phase's scope; `reconnect.rs` belongs to a later
+phase's inventory.
+
+The manual guest run (back brief point 2) happened on 2026-11-15
+against the XFCE desktop guest, and the panels, dialogs and cursor
+were confirmed by hand. It needed `make test-qemu-desktop
+QEMU_SPICE_PORT=5901`: andris holds 127.0.0.1:5900 on this host, and
+the target's default port is 5900, so qemu exits before it
+daemonizes and `make` still prints a connect line for a guest that
+is not there.
+
 ## Back brief
 
 Before executing any step, back brief the operator on your
