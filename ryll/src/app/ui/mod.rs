@@ -1,5 +1,7 @@
+mod cursor;
 mod dialogs;
 mod notifications_panel;
+mod region_select;
 mod stats_bar;
 mod surface;
 mod traffic_panel;
