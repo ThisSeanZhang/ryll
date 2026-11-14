@@ -1,13 +1,10 @@
 // Main application - egui App.
 //
-// This implements `eframe::App::ui` — eframe 0.34 replaced the old
-// `update()` trait method with `ui()`, which hands us a root
-// `&mut Ui` that fills the viewport. egui 0.35 then unified
-// `TopBottomPanel`/`SidePanel` into a single `Panel` type and made
-// every panel's `show` take that `&mut Ui` instead of a `&Context`
-// (`Window`s still take `&Context`). The panel/menu/frame call sites
-// in `ui()` carry per-change notes; this completes the migration
-// formerly tracked in `docs/plans/PLAN-egui-0.34-followups.md`.
+// This holds the `RyllApp` struct and its fields, its construction,
+// and the `eframe::App` impl: `logic`, which keeps the session
+// ticking whether or not the window is drawn, and `ui`, which is the
+// sequence of calls that draws one frame. The drawing itself lives
+// in `app/ui/`.
 
 use eframe::egui;
 use std::collections::{BTreeMap, VecDeque};
@@ -62,10 +59,7 @@ use bug_report::{PendingBugReport, PendingDisconnectReport};
 use connection::build_connection_runtime;
 use notification_snapshots::NotificationSnapshotStore;
 use reconnect::{forbid_retry_modal, ReconnectState};
-use resize::{
-    compute_auto_resize, compute_outgoing_resize, resolution_notification_due, send_guest_size,
-    RESOLUTION_NOTIFY_DEBOUNCE, STATS_BAR_HEIGHT,
-};
+use resize::{resolution_notification_due, RESOLUTION_NOTIFY_DEBOUNCE};
 use stats::{BandwidthTracker, LatencyTracker, Statistics};
 use trigger_snapshot::{RegionSelectEnd, TriggerSnapshot, WindowShot};
 use ui_state::UiStateTracker;
@@ -934,48 +928,6 @@ impl RyllApp {
             }
         }
     }
-
-    /// Tell the main channel the size the window last auto-fitted to,
-    /// if that is still to do. On a full queue it stays pending for the
-    /// next frame; on a closed one the session is gone and it is moot.
-    fn send_pending_guest_size(&mut self) {
-        if let Some(tx) = &self.resize_tx {
-            send_guest_size(tx, &mut self.pending_guest_size);
-        }
-    }
-
-    fn maybe_send_monitors_resize(&mut self, ctx: &egui::Context) {
-        // First, so that it reaches the main channel ahead of any size
-        // requested below, which supersedes it.
-        self.send_pending_guest_size();
-        let Some(tx) = &self.resize_tx else {
-            return;
-        };
-
-        let viewport_size = ctx.input(|i| {
-            i.viewport()
-                .inner_rect
-                .map(|rect| rect.size())
-                .unwrap_or_else(|| i.viewport_rect().size())
-        });
-
-        let is_max = ctx.input(|i| {
-            i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
-        });
-
-        let (width, height) = compute_outgoing_resize((viewport_size.x, viewport_size.y), is_max);
-
-        if self.last_sent_resize == Some((width, height)) {
-            return;
-        }
-
-        if tx.try_send(DisplaySize::Requested(width, height)).is_ok() {
-            self.last_sent_resize = Some((width, height));
-            // Queued behind it or in place of it: either way the main
-            // channel's last word is now this request.
-            self.pending_guest_size = None;
-        }
-    }
 }
 
 /// Whether the window has keyboard focus, read so that it is current in a
@@ -1182,50 +1134,21 @@ impl eframe::App for RyllApp {
             return;
         }
 
+        // The call order below is the frame: egui reserves each
+        // panel's space in the order the panels are drawn, which is
+        // why the status bar comes before the central panel that
+        // fills what is left of the window, and the windows are
+        // drawn in z-order, back to front.
         self.gate_keyboard_focus(ctx);
-
-        // Resize viewport to match the remote surface (plus stats
-        // bar) whenever a new primary surface differs from the
-        // size we last fitted to. Maximised/fullscreen windows
-        // are left alone — we cannot meaningfully change their
-        // inner size, and the surface will render at native size
-        // inside the available area.
-        let pending = self.pending_resize.take();
-        let is_max = ctx.input(|i| {
-            i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
-        });
-        if let Some((w, h, aw, ah)) =
-            compute_auto_resize(pending, self.last_auto_resize, is_max, self.obey_guest_size)
-        {
-            let total_h = h + STATS_BAR_HEIGHT;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, total_h)));
-            // Seed last_sent_resize so maybe_send_monitors_resize
-            // doesn't echo our own resize back to the guest as a
-            // VDAgentMonitorsConfig change, and tell the main channel
-            // the guest has this size, so it drops any size it is
-            // still holding for an agent rather than sending it.
-            self.last_sent_resize = Some((aw, ah));
-            self.pending_guest_size = Some((aw, ah));
-            self.last_auto_resize = Some((aw, ah));
-            info!("app: window resize to {}x{} (surface)", w as u32, h as u32);
-        }
-
-        self.maybe_send_monitors_resize(ctx);
-
+        self.fit_viewport_to_surface(ctx);
         self.handle_hotkeys(ctx);
-
         self.refresh_traffic_entries();
 
         self.draw_stats_bar(ui, ctx);
-
         self.draw_traffic_panel(ui);
-
         self.draw_notifications_panel(ui);
-
         self.draw_usb_panel(ui, ctx);
-
         self.draw_webdav_panel(ui, ctx);
-
         let outcome = self.draw_surface(ui, ctx);
 
         // Open bug report dialog for channel error (two-pass)
@@ -1235,19 +1158,12 @@ impl eframe::App for RyllApp {
         }
 
         self.draw_bug_report_dialog(ctx);
-
         self.draw_paste_error_dialog(ctx);
-
         self.draw_region_select(ctx);
-
         self.draw_cursor_overlay(ctx);
-
         self.draw_protocol_gaps_window(ctx);
-
         self.draw_reconnect_modal(ctx);
-
         self.hide_host_cursor(ctx, outcome.pointer_on_surface);
-
         self.observe_ui_state(ctx);
     }
 }
