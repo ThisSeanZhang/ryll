@@ -365,6 +365,7 @@ uncommitted for review in the management session.
 | 4e | medium | sonnet | none | Move the region overlay and the cursor into their files |
 | 4f | high | opus | none | Move the input subsystem into `keys.rs` |
 | 4g | medium | opus | none | Finish `ui`, the resize seam, and the documentation |
+| 4h | high | opus | none | Bring every draw method under the length lint |
 
 ### Step 4a: `app/ui/` and the four side panels
 
@@ -562,6 +563,36 @@ reader's mental model:
    to `docs/` for this phase: no user-visible behaviour changed.
 
 Commit subject: `Reduce ui to its draw sequence.`
+
+### Step 4h: under the length lint
+
+Added during execution; see the execution notes for why. After 4g,
+run
+
+```
+cargo clippy --frozen -p ryll --features gui,digest-decode \
+    -- -W clippy::too_many_lines
+```
+
+and split every function it names under `ryll/src/app/ui/` until it
+names none. Two are known in advance, both created by 4a:
+`draw_usb_panel` at 210 lines and `draw_notifications_panel` at
+123. The USB panel's first 60 lines are not drawing at all -- first-
+open enumeration, the file-picker poll, the error auto-clear and a
+repaint request -- so they become a `poll_usb_state` method called
+at the top of the draw; what is left splits along the panel's own
+header, device-list and virtual-disk seams. The notifications panel
+splits at its header and list boundary. Whatever 4c to 4f leave over
+100 is split the same way, along a seam the code already has.
+
+The rules of 4b apply unchanged: bodies verbatim, sub-methods
+private, no statement reordered, and the re-inlining check must
+reproduce each original block token for token.
+
+`RyllApp::new` and `connection.rs`'s `reconnect` are out of scope
+and stay over the threshold: they are phase 5's and phase 6's.
+
+Commit subject: `Bring every draw under the length lint.`
 
 ## Risks and mitigations
 
@@ -778,6 +809,18 @@ the step 4a brief both said `ui` alone, which is wrong and would
 not compile; both are corrected above. The survey's own
 measurements had it right, so this was a transcription error in the
 plan rather than a wrong reading of the tree.
+
+**A step was added: 4h.** The definition of done says no function
+under `ryll/src/app/` may exceed 100 lines by clippy's count except
+`RyllApp::new` and `reconnect`, but the step table had no step that
+could deliver it. Step 4a's `draw_usb_panel` is 210 lines and
+`draw_notifications_panel` 123 -- they were always that long, hidden
+inside a 1,390-line `ui`, and the survey measured them before the
+criterion was written. The criterion was the error, not the step.
+Offered the choice between splitting them and recording them as
+exceptions for phase 6, the operator chose to split, so step 4h
+sweeps whatever clippy still names once the moves are done. The
+definition of done stands as written.
 
 `app/mod.rs` also loses four imports in step 4a -- `format_size`,
 `TrafficDirection`, `usb::{self, DeviceSource}` -- because their
