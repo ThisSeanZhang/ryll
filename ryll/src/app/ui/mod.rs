@@ -1,3 +1,4 @@
+mod dialogs;
 mod notifications_panel;
 mod stats_bar;
 mod surface;
