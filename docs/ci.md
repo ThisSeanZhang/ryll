@@ -43,6 +43,33 @@ enqueue` status check:
 | `bidi and zero-width` | self-hosted `s` | `tools/check-bidi.sh` |
 | `skillsaw` | self-hosted `s` | `pre-commit run skillsaw` over the agent context |
 
+Every job in that table except `gitleaks` is fork-guarded: a pull
+request from a fork does not run it. The `vm` runners the smoke tier
+uses are conductor-provisioned ephemeral VMs, and the conductor's
+cloud-init writes `/srv/github/id_ci` -- the key to every node in the
+CI mesh -- and `~/.shakenfist` onto each one, owned by the user job
+steps run as, on a runner with passwordless sudo. Being ephemeral does
+not help: a fresh VM per job stops persistence and cross-job
+contamination, not theft, because both secrets are written again onto
+every fresh runner.
+
+Each of those jobs runs something a fork can edit -- the Makefile and
+dependencies' `build.rs` for the three build lanes, `tools/*.sh` for
+`shellcheck` and `bidi and zero-width`, `.pre-commit-config.yaml` for
+`skillsaw`, and `.cargo/config.toml`, whose `[alias]` and `[build]`
+keys cargo honours, for `cargo audit` and `cargo deny`. `gitleaks` is
+the exception because it reads the fork's content purely as data: it
+installs its own binary and scans files without executing any of them,
+so it is both safe to run and the one CI signal a fork pull request
+still gets.
+
+The trade-off is that a fork pull request is otherwise untested by CI,
+and `Can enqueue`'s jq treats a skipped dependency as success, so the
+gate goes green having run almost nothing. `MERGE-TEMPLATE.md`'s Wave 0
+is what closes that gap: it runs the same scanners locally, before CI
+is approved, and is documented there as the gate on that approval
+rather than something that happens alongside it.
+
 The **merge tier** runs on `merge_group` and gates `Can merge`:
 
 | Job | Runner | What it does |

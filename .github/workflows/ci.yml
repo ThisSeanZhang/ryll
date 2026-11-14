@@ -25,6 +25,32 @@ name: CI
 # consume check_paths. Their whole point is to read human-written text,
 # and a secret or a smuggled character lands in documentation or a
 # review note as easily as in code.
+#
+# Every self-hosted job that runs code from the checkout also carries a
+# fork guard. The `vm` label means a conductor-provisioned ephemeral
+# runner, and the conductor's cloud-init writes /srv/github/id_ci -- the
+# key to every node in the CI mesh, as proxmox-functional.yml says -- and
+# ~/.shakenfist onto every one of them, owned by the user job steps run
+# as, on a runner with passwordless sudo. Ephemerality is no defence:
+# both secrets are re-provisioned onto each fresh runner, so one `cat`
+# and one `curl` through the proxy is the whole attack. A fork can edit
+# anything it is about to have run -- the Makefile and a dependency's
+# build.rs for lint, check-windows and build-linux; tools/*.sh for
+# shellcheck and bidi-check; .pre-commit-config.yaml for skillsaw; and
+# .cargo/config.toml, whose [alias] and [build] keys cargo honours, for
+# cargo-audit and cargo-deny.
+#
+# gitleaks is the one scanner left unguarded, because it is the only one
+# that reads the fork's content purely as data: it installs its own
+# binary and scans files without executing any of them. That is also why
+# it is worth keeping on a fork -- it is the one CI check a fork pull
+# request still gets.
+#
+# The cost is real: a fork pull request gets gitleaks and nothing else,
+# and can_enqueue's jq treats a skipped dependency as success, so the
+# gate goes green having tested nothing. MERGE-TEMPLATE.md's Wave 0 is
+# what covers that gap -- it runs the same scanners locally, before CI
+# is approved at all, and is documented as the gate on that approval.
 on:
   pull_request:
     branches: [develop]
@@ -103,6 +129,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-lint
       cancel-in-progress: true
@@ -143,6 +171,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-check-windows
       cancel-in-progress: true
@@ -166,6 +196,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-build-linux
       cancel-in-progress: true
@@ -240,6 +272,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-cargo-audit
       cancel-in-progress: true
@@ -263,6 +297,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-cargo-deny
       cancel-in-progress: true
@@ -318,6 +354,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-shellcheck
       cancel-in-progress: true
@@ -375,7 +413,12 @@ jobs:
     name: bidi and zero-width
     runs-on: [self-hosted, vm, debian-13, s]
     timeout-minutes: 15
-    if: github.event_name != 'merge_group'
+    # Fork-guarded, unlike gitleaks above, because it runs
+    # tools/check-bidi.sh from the checkout, which a fork can edit.
+    if: >-
+      github.event_name != 'merge_group'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-bidi-check
       cancel-in-progress: true
@@ -413,6 +456,8 @@ jobs:
     if: >-
       github.event_name != 'merge_group'
       && needs.check_paths.outputs.code_changed != 'false'
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-skillsaw
       cancel-in-progress: true
