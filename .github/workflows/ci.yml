@@ -36,21 +36,37 @@ name: CI
 # and one `curl` through the proxy is the whole attack. A fork can edit
 # anything it is about to have run -- the Makefile and a dependency's
 # build.rs for lint, check-windows and build-linux; tools/*.sh for
-# shellcheck and bidi-check; .pre-commit-config.yaml for skillsaw; and
-# .cargo/config.toml, whose [alias] and [build] keys cargo honours, for
-# cargo-audit and cargo-deny.
+# shellcheck and bidi-check; .pre-commit-config.yaml, and a
+# .skillsaw.yaml whose custom-rules skillsaw imports as Python, for
+# skillsaw; and .cargo/config.toml, whose [alias] and [build] keys cargo
+# honours, for cargo-audit and cargo-deny. The full list of files a
+# reviewer reads before approving is CONTROL_PATHS in
+# tools/wave0-scan.sh; keep the two in step.
+#
+# The guard is defence in depth, not the boundary. GitHub runs a pull
+# request's workflows from the pull request's own copy of this file, so
+# a fork can delete the guard in the same pull request that carries the
+# hostile code. What stops that is GitHub's fork workflow approval, set
+# on this repository to require approval for all external contributors
+# (not only first-time ones), and the reviewer reading the diff to
+# .github/ before pressing "Approve and run". MERGE-TEMPLATE.md's Step 7
+# says so.
 #
 # gitleaks is the one scanner left unguarded, because it is the only one
 # that reads the fork's content purely as data: it installs its own
 # binary and scans files without executing any of them. That is also why
 # it is worth keeping on a fork -- it is the one CI check a fork pull
-# request still gets.
+# request still gets. gitleaks also reads its configuration from the
+# tree it scans, so on a fork its .gitleaks.toml and .gitleaksignore are
+# taken from the base branch first; otherwise the fork could silence it.
 #
 # The cost is real: a fork pull request gets gitleaks and nothing else,
 # and can_enqueue's jq treats a skipped dependency as success, so the
-# gate goes green having tested nothing. MERGE-TEMPLATE.md's Wave 0 is
-# what covers that gap -- it runs the same scanners locally, before CI
-# is approved at all, and is documented as the gate on that approval.
+# gate goes green having tested nothing. MERGE-TEMPLATE.md's Wave 0
+# (tools/wave0-scan.sh) is what covers that gap -- it runs the same
+# scanners locally from develop's copies, before CI is approved at all,
+# and is documented as the gate on that approval. The automated reviewer
+# needs every smoke job, so on a fork it is skipped too.
 on:
   pull_request:
     branches: [develop]
@@ -73,8 +89,12 @@ jobs:
     outputs:
       code_changed: ${{ steps.filter.outputs.code || 'true' }}
     steps:
+      # Only merge_group needs a checkout: there the filter diffs
+      # against base_sha with git. On pull_request it reads the changed
+      # files from the API, as codeql-analysis.yml's check_paths does,
+      # so a fork's content never reaches the persistent static pool.
       - uses: actions/checkout@v7
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'merge_group'
       - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name != 'workflow_dispatch'
@@ -331,6 +351,24 @@ jobs:
 
       - name: Install gitleaks
         run: sudo apt-get update && sudo apt-get install -y gitleaks
+
+      # gitleaks reads .gitleaks.toml and .gitleaksignore from the tree
+      # it scans, so a fork could add an allowlist covering its own
+      # findings. Take both from the base branch instead. Inline, not a
+      # tools/ script: this job is unguarded, so it runs nothing from
+      # the checkout. Same-repository pull requests keep their own, so a
+      # false positive can still be ignored in the pull request adding it.
+      - name: Take gitleaks configuration from the base branch
+        if: >-
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          for f in .gitleaks.toml .gitleaksignore; do
+            rm -f "$f"
+            if git cat-file -e "${BASE_SHA}:${f}" 2>/dev/null; then git show "${BASE_SHA}:${f}" > "$f"; fi
+          done
 
       # --log-opts="HEAD" scopes the scan to this branch and the
       # history behind it. Without it gitleaks scans every ref, which

@@ -46,29 +46,47 @@ enqueue` status check:
 Every job in that table except `gitleaks` is fork-guarded: a pull
 request from a fork does not run it. The `vm` runners the smoke tier
 uses are conductor-provisioned ephemeral VMs, and the conductor's
-cloud-init writes `/srv/github/id_ci` -- the key to every node in the
-CI mesh -- and `~/.shakenfist` onto each one, owned by the user job
+cloud-init writes `/srv/github/id_ci` — the key to every node in the
+CI mesh — and `~/.shakenfist` onto each one, owned by the user job
 steps run as, on a runner with passwordless sudo. Being ephemeral does
 not help: a fresh VM per job stops persistence and cross-job
 contamination, not theft, because both secrets are written again onto
 every fresh runner.
 
-Each of those jobs runs something a fork can edit -- the Makefile and
+Each of those jobs runs something a fork can edit — the Makefile and
 dependencies' `build.rs` for the three build lanes, `tools/*.sh` for
-`shellcheck` and `bidi and zero-width`, `.pre-commit-config.yaml` for
+`shellcheck` and `bidi and zero-width`, `.pre-commit-config.yaml` and
+`.skillsaw.yaml` (whose `custom-rules` skillsaw imports as Python) for
 `skillsaw`, and `.cargo/config.toml`, whose `[alias]` and `[build]`
 keys cargo honours, for `cargo audit` and `cargo deny`. `gitleaks` is
 the exception because it reads the fork's content purely as data: it
 installs its own binary and scans files without executing any of them,
 so it is both safe to run and the one CI signal a fork pull request
-still gets.
+still gets. It does read its configuration from the tree it scans, so
+on a fork pull request `.gitleaks.toml` and `.gitleaksignore` are first
+replaced with the base branch's; a fork that needs an ignore entry has
+to have it added on `develop`. `Check paths` and the three gates are
+unguarded too, because they run nothing from the tree: `Check paths`
+checks out only on `merge_group`, and reads a pull request's changed
+files from the API.
+
+The guard is defence in depth, not the boundary. A pull request's
+workflows run from the pull request's own copy of `ci.yml`, so a fork
+can delete the guard in the same pull request that carries the hostile
+code. What stops that is GitHub's fork workflow approval — on this
+repository it requires approval for all external contributors, not
+only first-time ones (`approval_policy: all_external_contributors`, as
+of November 2026) — together with the reviewer reading the diff to
+`.github/` before approving. If that setting is ever relaxed, the guard
+stops being worth much.
 
 The trade-off is that a fork pull request is otherwise untested by CI,
 and `Can enqueue`'s jq treats a skipped dependency as success, so the
 gate goes green having run almost nothing. `MERGE-TEMPLATE.md`'s Wave 0
-is what closes that gap: it runs the same scanners locally, before CI
-is approved, and is documented there as the gate on that approval
-rather than something that happens alongside it.
+is what closes that gap: `tools/wave0-scan.sh` runs the same scanners
+locally, from `develop`'s copies, before CI is approved, and is
+documented there as the gate on that approval rather than something
+that happens alongside it.
 
 The **merge tier** runs on `merge_group` and gates `Can merge`:
 
@@ -629,7 +647,9 @@ on `workflow_dispatch`. The pull request trigger exists so that a
 change to the lane runs before it merges: a workflow cannot be
 dispatched or scheduled until it is on `develop`. Pull requests
 that touch the RDP code do not run it, to keep `l` runners free; run
-`make rdp-smoke` locally for those.
+`make rdp-smoke` locally for those. Like the smoke tier it is fork-guarded:
+its `vm` runner holds the same CI mesh key, and a fork reaches the
+lane just by editing the workflow.
 
 The criterion for moving it into `ci.yml`'s smoke tier, set before
 the record exists so that it cannot drift to whatever is convenient
@@ -725,12 +745,17 @@ To find out what happened:
 * go to **Actions → CI** and look for the run whose branch is
   `gh-readonly-queue/develop/pr-<your PR>-<sha>`.
 
-An ejection means one of two things. Either your change really
+An ejection usually means one of two things. Either your change really
 does break a platform the smoke tier cannot see — the usual
 suspects are the msvc Windows builds and anything that only
 compiles on aarch64 — or the merge tier hit infrastructure
 flakiness. Push a fix and merge again, or just re-queue the
 unchanged pull request if you believe it was flaky.
+
+For a pull request from a fork there is a third: the merge group is
+the first CI build its code ever gets, because the smoke tier is
+fork-guarded. An ejection there may be an ordinary build failure the
+smoke tier never had the chance to report.
 
 A queued entry is also rebuilt when `develop` moves underneath
 it, which the `prune-reviews` bot does after most merges. With
