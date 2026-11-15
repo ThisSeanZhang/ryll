@@ -41,7 +41,7 @@ enqueue` status check:
 | `gitleaks` | self-hosted `s` | Secret scanning over full history |
 | `shellcheck` | self-hosted `s` | `tools/run-shellcheck.sh`, then `tools/audit/test-audit-range.sh`, `tools/test-report-fuzz-failure.sh`, `tools/test-report-fuzz-run.sh` and `tools/test-fuzz-targets.sh` |
 | `bidi and zero-width` | self-hosted `s` | `tools/check-bidi.sh` |
-| `skillsaw` | self-hosted `s` | `pre-commit run skillsaw` over the agent context |
+| `skillsaw` | self-hosted `s` | `pre-commit run skillsaw` over the agent context, then `tools/test-wave0-scan.sh` |
 
 Every job in that table except `gitleaks` is fork-guarded: a pull
 request from a fork does not run it. The `vm` runners the smoke tier
@@ -86,7 +86,17 @@ pull request's own commits a second time with each one closed:
 
 The range starts at the merge ref's first parent rather than the
 event's `base.sha`, which is stale when a run is repeated after
-`develop` has moved.
+`develop` has moved, and a step before both checks that the checkout
+really is that merge ref.
+
+A merge of `develop` into the fork's branch, diffed against its first
+parent, shows everything `develop` brought across as added by that
+merge. So a finding attributed to a merge commit may be content
+`develop` already carries, which `.gitleaksignore` cannot match: its
+fingerprints name the commit that added the line. Check the line on
+`develop` first. If it is ours and already accepted, add the
+merge-attributed fingerprint gitleaks printed to `develop`'s
+`.gitleaksignore`, or ask the contributor to rebase rather than merge.
 
 `Check paths` and the three gates are unguarded too, because they run
 nothing from the tree: `Check paths` checks out only on `merge_group`,

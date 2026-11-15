@@ -150,8 +150,10 @@ bidi_files() {
 
 no_match() {
     # grep exits 1 on no match, the clean case; 2 is an error, not clean.
+    # -a prints a matching line even when the history holds a binary
+    # file's bytes, rather than only "binary file matches".
     local rc=0
-    LC_ALL=C.UTF-8 grep -nP "$1" "$WORK/history" || rc=$?
+    LC_ALL=C.UTF-8 grep -anP "$1" "$WORK/history" || rc=$?
     [ "$rc" -eq 1 ]
 }
 

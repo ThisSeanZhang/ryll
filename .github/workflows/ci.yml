@@ -338,7 +338,24 @@ jobs:
       # tools/ script: this job is unguarded, so it runs nothing from
       # the checkout. Same-repository pull requests keep their own, so a
       # false positive can still be ignored in the pull request adding it.
-      # HEAD^1 is the base branch as the merge ref was built on it.
+      # Both fork-only steps below read the base branch as HEAD^1, which
+      # holds only on the merge ref actions/checkout gives a pull_request:
+      # checked out at the head commit instead, HEAD^1 would be a commit
+      # the fork chose. A second parent alone does not prove it, since
+      # the fork's head may itself be a merge, so this checks HEAD^2 is
+      # the pull request's head.
+      - name: Check HEAD is the pull request's merge commit
+        if: >-
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse --verify --quiet HEAD^2)" != "${HEAD_SHA}" ]; then
+            echo "::error::HEAD is not the merge of the pull request's head into its base."
+            exit 1
+          fi
+
       - name: Take gitleaks configuration from the base branch
         if: >-
           github.event_name == 'pull_request'
@@ -375,8 +392,6 @@ jobs:
           github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name != github.repository
         run: |
-          git rev-parse --verify --quiet HEAD^2 >/dev/null \
-            || { echo "::error::HEAD is not the pull request's merge commit."; exit 1; }
           mkdir -p .git/info && echo '* diff=neutralise-allow' > .git/info/attributes
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.neutralise-allow.textconv \
             GIT_CONFIG_VALUE_0="sed -e 's/gitleaks:allow/gitleaks-allow-ignored/g'"

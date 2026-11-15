@@ -186,6 +186,12 @@ after Wave 0: a changed `Makefile`, `.devcontainer/`,
 `.cargo/` or `.github/` decides what `make lint` and CI
 would run. Read every file on both lists before either.
 
+A branch that edits the scanners' own documentation, this
+file and `tools/wave0-scan.sh` included, matches the
+prompt-injection shapes they spell out. Such a hit is
+expected: read the printed line, and escalate only if it is
+not the documentation.
+
 Each scanner was chosen, and is invoked, so that the
 contributor cannot pick what runs or what passes. The
 contributor's `tools/check-bidi.sh` and
