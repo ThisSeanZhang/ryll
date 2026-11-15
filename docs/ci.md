@@ -65,20 +65,34 @@ so it is both safe to run and the one CI signal a fork pull request
 still gets. It does read its configuration from the tree it scans, so
 on a fork pull request `.gitleaks.toml` and `.gitleaksignore` are first
 replaced with the base branch's; a fork that needs an ignore entry has
-to have it added on `develop`. `Check paths` and the three gates are
-unguarded too, because they run nothing from the tree: `Check paths`
-checks out only on `merge_group`, and reads a pull request's changed
-files from the API.
+to have it added on `develop`. That swap leaves two ways round it,
+which a fork pull request's `gitleaks` job checks as well. An inline
+`gitleaks:allow` comment silences the finding on its line whatever the
+configuration says, so a fork pull request that adds one fails. And
+`git log -p`, which gitleaks reads, prints no patch for a merge commit,
+so content that exists only in a merge resolution would reach no scan;
+gitleaks is run a second time over the pull request's commits with
+each merge diffed against its first parent.
+
+`Check paths` and the three gates are unguarded too, because they run
+nothing from the tree: `Check paths` checks out only on `merge_group`,
+and reads a pull request's changed files from the API.
 
 The guard is defence in depth, not the boundary. A pull request's
 workflows run from the pull request's own copy of `ci.yml`, so a fork
 can delete the guard in the same pull request that carries the hostile
 code. What stops that is GitHub's fork workflow approval — on this
 repository it requires approval for all external contributors, not
-only first-time ones (`approval_policy: all_external_contributors`, as
-of November 2026) — together with the reviewer reading the diff to
+only first-time ones — together with the reviewer reading the diff to
 `.github/` before approving. If that setting is ever relaxed, the guard
-stops being worth much.
+stops being worth much. The daily configuration export does not
+capture it, so check it directly; this should print
+`all_external_contributors`:
+
+```sh
+gh api repos/shakenfist/ryll/actions/permissions/fork-pr-contributor-approval \
+  --jq .approval_policy
+```
 
 The trade-off is that a fork pull request is otherwise untested by CI,
 and `Can enqueue`'s jq treats a skipped dependency as success, so the

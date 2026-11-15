@@ -173,10 +173,10 @@ bash <(git show origin/develop:tools/wave0-scan.sh) pr<NN>-review
 | Lane changes | `CONTROL_PATHS` in `tools/wave0-scan.sh`, listed first, reviewed by eye | a fork editing the workflow, `Makefile`, script, image or scanner configuration that decides what runs and what passes |
 | Build-script additions | `**/build.rs`, `**/Cargo.toml`, `Cargo.lock`, listed, reviewed by eye | new `build.rs` files, changed `[build-dependencies]`, new `links =` entries, unexplained new crates |
 | Unicode safety | `develop`'s `tools/check-bidi.sh` over the changed files | Trojan Source (CVE-2021-42574), homoglyph names |
-| Unicode in metadata | `grep` over every commit's message and patch | the same codepoints in commit messages, removed lines, and lines added then removed again |
+| Unicode in metadata | `grep` over every commit's message and patch, merges included | the same codepoints in commit messages, removed lines, lines added then removed again, and merge resolutions |
 | Prompt-injection shapes | `grep` over the same history | "ignore previous instructions", "you are now", "new instructions:" |
 | Inline suppressions | `grep` over the same history | `gitleaks:allow`, which gitleaks honours wherever it appears |
-| Credential leaks | `gitleaks git` over `develop..<branch>`, at the rev and with the `.gitleaksignore` `develop` pins | API keys, tokens, private keys |
+| Credential leaks | `gitleaks git` over `develop..<branch>`, merges diffed against their first parent, at the rev and with the `.gitleaksignore` `develop` pins | API keys, tokens, private keys |
 | Smuggled agent instructions | `skillsaw lint --no-custom-rules`, at the rev and with the configuration `develop` pins | malformed agent context, instructions aimed at an agent reading the repo |
 
 The script prints the two by-eye lists before running
@@ -193,12 +193,18 @@ the commit range rather than the index (the upstream
 pre-commit hook scans only staged changes, so on a review
 checkout it passes having read nothing), and runs from a
 checkout of `develop`, so the contributor's `.gitleaks.toml`
-and `.gitleaksignore` are not read. skillsaw has to read the
+and `.gitleaksignore` are not read. Plain `git log -p`
+prints no patch for a merge commit, so the history scans and
+gitleaks both read merges explicitly; otherwise a secret
+added while resolving a merge would reach nothing. skillsaw has to read the
 contributor's tree, so `develop`'s configuration replaces
 theirs, and `--no-custom-rules` stops it importing any
 Python a configuration names. `tools/test-wave0-scan.sh`
 plants each of those attacks and checks the scan still
-reports, and that nothing from the contributor's tree ran.
+reports, and that nothing from the contributor's tree ran;
+CI's `skillsaw` job runs that test. The script needs GNU
+`grep` (for `-P`) and `pre-commit`, and stops with an error,
+not a finding, when either is missing.
 
 `cargo audit` and `cargo deny` are deliberately absent:
 neither is installed on the host and neither is baked into

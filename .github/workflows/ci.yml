@@ -59,6 +59,10 @@ name: CI
 # request still gets. gitleaks also reads its configuration from the
 # tree it scans, so on a fork its .gitleaks.toml and .gitleaksignore are
 # taken from the base branch first; otherwise the fork could silence it.
+# Two ways round that swap are checked separately on a fork: an inline
+# gitleaks:allow comment, which no configuration can turn off, and
+# content that exists only in a merge resolution, which `git log -p`
+# -- and so gitleaks's own history scan -- never prints.
 #
 # The cost is real: a fork pull request gets gitleaks and nothing else,
 # and can_enqueue's jq treats a skipped dependency as success, so the
@@ -86,6 +90,11 @@ jobs:
     name: "Check paths"
     runs-on: [self-hosted, static]
     timeout-minutes: 10
+    # contents for the merge_group checkout, pull-requests for the
+    # API-backed filter; not the workflow's write scopes.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       code_changed: ${{ steps.filter.outputs.code || 'true' }}
     steps:
@@ -367,8 +376,41 @@ jobs:
         run: |
           for f in .gitleaks.toml .gitleaksignore; do
             rm -f "$f"
-            if git cat-file -e "${BASE_SHA}:${f}" 2>/dev/null; then git show "${BASE_SHA}:${f}" > "$f"; fi
+            if git cat-file -e "${BASE_SHA}:${f}" 2>/dev/null; then
+              git show "${BASE_SHA}:${f}" > "$f" || exit 1
+              echo "Using the base branch's ${f}"
+            else
+              echo "The base branch has no ${f}"
+            fi
           done
+
+      # The swap above leaves a fork two ways to hide a credential. An
+      # inline gitleaks:allow comment silences the finding on its line
+      # and no configuration can turn it off, so a fork may not add one.
+      # And `git log -p`, which gitleaks reads, prints no patch for a
+      # merge commit, so content that exists only in a merge resolution
+      # reaches no scan. gitleaks is run again diffing each merge against
+      # its first parent, a format it parses; it reads --cc's combined
+      # format as empty. The grep uses --cc, which prints only the hunks
+      # where a merge took neither parent's version, so a routine merge
+      # of develop does not bring this repository's own mentions of the
+      # comment across. tools/wave0-scan.sh makes the same checks.
+      - name: Check merges and inline suppressions
+        if: >-
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          gitleaks detect --source . --redact --verbose --no-banner \
+            --log-opts="--diff-merges=first-parent ${BASE_SHA}..HEAD"
+          git log -p --cc --format= "${BASE_SHA}..HEAD" > "${RUNNER_TEMP}/pr-history"
+          status=0
+          grep -n '^+.*gitleaks:allow' "${RUNNER_TEMP}/pr-history" || status=$?
+          if [ "$status" -ne 1 ]; then
+            echo "::error::An inline gitleaks:allow, which a fork may not add (grep exited ${status})."
+            exit 1
+          fi
 
       # --log-opts="HEAD" scopes the scan to this branch and the
       # history behind it. Without it gitleaks scans every ref, which
@@ -518,6 +560,15 @@ jobs:
       # names while holding a second runner to do it.
       - name: Lint agent context
         run: pre-commit run skillsaw --all-files
+
+      # MERGE-TEMPLATE.md's Wave 0 scanner, whose failure mode is a scan
+      # that reads nothing, or reads the contributor's configuration, and
+      # passes. Here because its test drives the real gitleaks and
+      # skillsaw through pre-commit, which this job has just installed;
+      # the gitleaks environment is built from the pinned rev on first
+      # use, like skillsaw's above. Scratch repositories only, no Docker.
+      - name: Test the Wave 0 scanner
+        run: ./tools/test-wave0-scan.sh
 
   # Merge tier: the job below runs on merge_group (and on
   # workflow_dispatch) and gates "Can merge". It is the expensive one,

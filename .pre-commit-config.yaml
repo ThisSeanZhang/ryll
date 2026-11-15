@@ -108,7 +108,8 @@ repos:
       # And MERGE-TEMPLATE.md's Wave 0 scanner, whose failure mode is a
       # scan that reads nothing, or reads the contributor's configuration,
       # and passes. It runs the real gitleaks and skillsaw through
-      # pre-commit, so its first run needs network; it is not in CI.
+      # pre-commit, so its first run needs network. CI's skillsaw job
+      # runs it too.
       - id: wave0-scan-test
         name: Wave 0 scanner smoke test
         entry: ./tools/test-wave0-scan.sh

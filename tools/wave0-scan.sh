@@ -25,9 +25,11 @@
 # are what decide what `make` and CI would run, and they have to be read
 # by eye before either. It then runs the scanners and summarises.
 #
-# Needs git, pre-commit and network access the first time pre-commit
-# builds the gitleaks and skillsaw environments. tools/test-wave0-scan.sh
-# pins its behaviour.
+# Needs git, GNU grep (for -P), pre-commit, and network access the
+# first time pre-commit builds the gitleaks and skillsaw environments;
+# it checks for the first three before scanning, so a missing tool is a
+# usage error rather than a finding. tools/test-wave0-scan.sh pins its
+# behaviour, and CI's skillsaw job runs that test.
 #
 # Usage: wave0-scan.sh REF
 # Exit code: 0 every scanner clean, 1 any scanner found something,
@@ -45,6 +47,9 @@ die() {
 }
 
 [ $# -eq 1 ] || die "usage: wave0-scan.sh REF"
+command -v git >/dev/null || die "git is not installed"
+command -v pre-commit >/dev/null || die "pre-commit is not installed"
+printf 'x\n' | grep -qP 'x' 2>/dev/null || die "grep does not support -P; GNU grep is needed"
 
 BASE_REF="${WAVE0_BASE:-origin/develop}"
 BASE="$(git rev-parse --verify --quiet "${BASE_REF}^{commit}")" \
@@ -112,7 +117,13 @@ check() {
 # The history, every commit's message and patch, is what the
 # pattern scans below read: it covers removed lines and lines added
 # and later removed again, which a scan of the final files cannot see.
-git log -p --format=fuller "$RANGE" > "$WORK/history"
+# Plain `git log -p` prints no patch for a merge commit, so content
+# that exists only in a merge resolution would be read by nothing.
+# --cc prints exactly that content: the hunks where the merge took
+# neither parent's version, and not the hunks a routine merge of
+# develop brings across unchanged, which would otherwise match this
+# script's own patterns. gitleaks below needs a different option.
+git log -p --cc --format=fuller "$RANGE" > "$WORK/history"
 
 BIDI_PATTERN="$(sed -n "s/^PATTERN='\(.*\)'$/\1/p" "$WORK/base/tools/check-bidi.sh")"
 [ -n "$BIDI_PATTERN" ] || die "cannot read PATTERN from ${BASE_REF}'s check-bidi.sh"
@@ -152,14 +163,21 @@ echo "Using gitleaks ${GITLEAKS_REV} and skillsaw ${SKILLSAW_REV}, as ${BASE_REF
 
 # The upstream gitleaks hook scans the index (--staged), so on a
 # checkout with nothing staged it passes having read nothing. The entry
-# is overridden to scan the range instead, at the pinned rev.
+# is overridden to scan the range instead, at the pinned rev. gitleaks
+# runs `git log -p` itself, so merge resolutions are as invisible to it
+# as to the history above, and it parses --cc's combined format as an
+# empty diff: it reports no leaks whatever the merge holds. Diffing
+# each merge against its first parent is a format it reads, and covers
+# everything a merge added to the branch -- including, on a merge of an
+# older develop, develop's own changes, so a finding attributed to a
+# merge commit may be one develop already carries.
 cat > "$WORK/pre-commit.yaml" <<EOF
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: ${GITLEAKS_REV}
     hooks:
       - id: gitleaks
-        entry: gitleaks git --redact --verbose --no-banner --log-opts=${RANGE}
+        entry: gitleaks git --redact --verbose --no-banner '--log-opts=--diff-merges=first-parent ${RANGE}'
   - repo: https://github.com/stbenjam/skillsaw
     rev: ${SKILLSAW_REV}
     hooks:
@@ -177,7 +195,10 @@ skillsaw_tree() {
     # skillsaw lints a tree, so it has to read the contributor's. Its
     # configuration is found by walking up from there, so swap BASE's in
     # for the contributor's; --no-custom-rules stops it importing Python
-    # a configuration names, whichever one is found.
+    # a configuration names, whichever one is found. --all-files is
+    # required, not incidental: without it pre-commit stashes unstaged
+    # changes, which would put the contributor's configuration back
+    # before the hook runs.
     local f
     for f in .skillsaw.yaml .skillsaw.yml .claudelint.yaml .claudelint.yml; do
         rm -f "$WORK/pr/$f"
