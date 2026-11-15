@@ -27,50 +27,18 @@ name: CI
 # review note as easily as in code.
 #
 # Every self-hosted job that runs code from the checkout also carries a
-# fork guard. The `vm` label means a conductor-provisioned ephemeral
-# runner, and the conductor's cloud-init writes /srv/github/id_ci -- the
-# key to every node in the CI mesh, as proxmox-functional.yml says -- and
-# ~/.shakenfist onto every one of them, owned by the user job steps run
-# as, on a runner with passwordless sudo. Ephemerality is no defence:
-# both secrets are re-provisioned onto each fresh runner, so one `cat`
-# and one `curl` through the proxy is the whole attack. A fork can edit
-# anything it is about to have run -- the Makefile and a dependency's
-# build.rs for lint, check-windows and build-linux; tools/*.sh for
-# shellcheck and bidi-check; .pre-commit-config.yaml, and a
-# .skillsaw.yaml whose custom-rules skillsaw imports as Python, for
-# skillsaw; and .cargo/config.toml, whose [alias] and [build] keys cargo
-# honours, for cargo-audit and cargo-deny. The full list of files a
-# reviewer reads before approving is CONTROL_PATHS in
-# tools/wave0-scan.sh; keep the two in step.
-#
-# The guard is defence in depth, not the boundary. GitHub runs a pull
-# request's workflows from the pull request's own copy of this file, so
-# a fork can delete the guard in the same pull request that carries the
-# hostile code. What stops that is GitHub's fork workflow approval, set
-# on this repository to require approval for all external contributors
-# (not only first-time ones), and the reviewer reading the diff to
-# .github/ before pressing "Approve and run". MERGE-TEMPLATE.md's Step 7
-# says so.
-#
-# gitleaks is the one scanner left unguarded, because it is the only one
-# that reads the fork's content purely as data: it installs its own
-# binary and scans files without executing any of them. That is also why
-# it is worth keeping on a fork -- it is the one CI check a fork pull
-# request still gets. gitleaks also reads its configuration from the
-# tree it scans, so on a fork its .gitleaks.toml and .gitleaksignore are
-# taken from the base branch first; otherwise the fork could silence it.
-# Two ways round that swap are checked separately on a fork: an inline
-# gitleaks:allow comment, which no configuration can turn off, and
-# content that exists only in a merge resolution, which `git log -p`
-# -- and so gitleaks's own history scan -- never prints.
-#
-# The cost is real: a fork pull request gets gitleaks and nothing else,
-# and can_enqueue's jq treats a skipped dependency as success, so the
-# gate goes green having tested nothing. MERGE-TEMPLATE.md's Wave 0
-# (tools/wave0-scan.sh) is what covers that gap -- it runs the same
-# scanners locally from develop's copies, before CI is approved at all,
-# and is documented as the gate on that approval. The automated reviewer
-# needs every smoke job, so on a fork it is skipped too.
+# fork guard, because the `vm` runners hold the CI mesh's SSH key and
+# sfcbr credentials, and a fork can edit whatever such a job runs. The
+# guard is defence in depth: a fork can delete it in the same pull
+# request, so the boundary is GitHub's fork workflow approval and the
+# reviewer reading .github/ first. gitleaks is the one scanner left
+# unguarded, because it reads the fork's content as data; on a fork it
+# takes its configuration from the base branch and scans the pull
+# request's commits a second time, so the fork cannot silence it.
+# docs/ci.md has the threat model and the reasoning; the files a
+# reviewer reads before approving are CONTROL_PATHS in
+# tools/wave0-scan.sh. A new job that runs anything from the checkout
+# needs the guard.
 on:
   pull_request:
     branches: [develop]
@@ -350,6 +318,9 @@ jobs:
     runs-on: [self-hosted, vm, debian-13, s]
     timeout-minutes: 15
     if: github.event_name != 'merge_group'
+    # The one job that runs on a fork's content; it needs nothing more.
+    permissions:
+      contents: read
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-gitleaks
       cancel-in-progress: true
@@ -367,50 +338,53 @@ jobs:
       # tools/ script: this job is unguarded, so it runs nothing from
       # the checkout. Same-repository pull requests keep their own, so a
       # false positive can still be ignored in the pull request adding it.
+      # HEAD^1 is the base branch as the merge ref was built on it.
       - name: Take gitleaks configuration from the base branch
         if: >-
           github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name != github.repository
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           for f in .gitleaks.toml .gitleaksignore; do
             rm -f "$f"
-            if git cat-file -e "${BASE_SHA}:${f}" 2>/dev/null; then
-              git show "${BASE_SHA}:${f}" > "$f" || exit 1
+            if git cat-file -e "HEAD^1:${f}" 2>/dev/null; then
+              git show "HEAD^1:${f}" > "$f" || exit 1
               echo "Using the base branch's ${f}"
             else
               echo "The base branch has no ${f}"
             fi
           done
 
-      # The swap above leaves a fork two ways to hide a credential. An
-      # inline gitleaks:allow comment silences the finding on its line
-      # and no configuration can turn it off, so a fork may not add one.
-      # And `git log -p`, which gitleaks reads, prints no patch for a
-      # merge commit, so content that exists only in a merge resolution
-      # reaches no scan. gitleaks is run again diffing each merge against
-      # its first parent, a format it parses; it reads --cc's combined
-      # format as empty. The grep uses --cc, which prints only the hunks
-      # where a merge took neither parent's version, so a routine merge
-      # of develop does not bring this repository's own mentions of the
-      # comment across. tools/wave0-scan.sh makes the same checks.
-      - name: Check merges and inline suppressions
+      # The swap above leaves a fork three ways to hide a credential
+      # from gitleaks: an inline gitleaks:allow comment, which silences
+      # the finding on its line whatever the configuration says; a
+      # .gitattributes marking a file -diff, or a NUL byte in it, either
+      # of which prints its patch as "Binary files differ"; and a merge
+      # resolution, which `git log -p` prints no patch for. So the pull
+      # request's commits are scanned again, each merge diffed against
+      # its first parent, and every file read through a textconv that
+      # renames the allow comment. The textconv is attached in
+      # .git/info/attributes, which outranks every .gitattributes, and
+      # a file with a textconv is diffed as text. Debian's gitleaks 8.16
+      # has no --ignore-gitleaks-allow, which tools/wave0-scan.sh uses
+      # instead. The range starts at the merge ref's first parent, not
+      # the event's base.sha, which is stale on a re-run after develop
+      # moves. Inline, like the step above, because this job runs
+      # nothing from the checkout.
+      - name: Scan the pull request's commits, merges included
         if: >-
           github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name != github.repository
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          gitleaks detect --source . --redact --verbose --no-banner \
-            --log-opts="--diff-merges=first-parent ${BASE_SHA}..HEAD"
-          git log -p --cc --format= "${BASE_SHA}..HEAD" > "${RUNNER_TEMP}/pr-history"
+          git rev-parse --verify --quiet HEAD^2 >/dev/null \
+            || { echo "::error::HEAD is not the pull request's merge commit."; exit 1; }
+          mkdir -p .git/info && echo '* diff=neutralise-allow' > .git/info/attributes
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.neutralise-allow.textconv \
+            GIT_CONFIG_VALUE_0="sed -e 's/gitleaks:allow/gitleaks-allow-ignored/g'"
           status=0
-          grep -n '^+.*gitleaks:allow' "${RUNNER_TEMP}/pr-history" || status=$?
-          if [ "$status" -ne 1 ]; then
-            echo "::error::An inline gitleaks:allow, which a fork may not add (grep exited ${status})."
-            exit 1
-          fi
+          gitleaks detect --source . --redact --verbose --no-banner \
+            --log-opts="--diff-merges=first-parent HEAD^1..HEAD" || status=$?
+          rm .git/info/attributes
+          exit "$status"
 
       # --log-opts="HEAD" scopes the scan to this branch and the
       # history behind it. Without it gitleaks scans every ref, which

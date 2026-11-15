@@ -153,7 +153,9 @@ gh pr checkout <NN> --branch pr<NN>-review
 
 `gh pr checkout` resolves the fork, its branch and any
 rename. Checking the branch out runs none of its code; what
-must not happen is running anything *from* it. If `gh` is
+must not happen is running anything *from* it, and opening
+the worktree in an editor that runs its `.vscode/` tasks, or
+in a shell where direnv loads its `.envrc`, counts. If `gh` is
 unavailable, add the fork as a remote and
 `git switch -c pr<NN>-review <remote>/<branch>`. One trap:
 if pre-commit is installed as a git hook, a `git commit` in
@@ -175,8 +177,7 @@ bash <(git show origin/develop:tools/wave0-scan.sh) pr<NN>-review
 | Unicode safety | `develop`'s `tools/check-bidi.sh` over the changed files | Trojan Source (CVE-2021-42574), homoglyph names |
 | Unicode in metadata | `grep` over every commit's message and patch, merges included | the same codepoints in commit messages, removed lines, lines added then removed again, and merge resolutions |
 | Prompt-injection shapes | `grep` over the same history | "ignore previous instructions", "you are now", "new instructions:" |
-| Inline suppressions | `grep` over the same history | `gitleaks:allow`, which gitleaks honours wherever it appears |
-| Credential leaks | `gitleaks git` over `develop..<branch>`, merges diffed against their first parent, at the rev and with the `.gitleaksignore` `develop` pins | API keys, tokens, private keys |
+| Credential leaks | `gitleaks git` over `develop..<branch>`, merges diffed against their first parent, inline `gitleaks:allow` ignored, at the rev and with the `.gitleaksignore` `develop` pins | API keys, tokens, private keys |
 | Smuggled agent instructions | `skillsaw lint --no-custom-rules`, at the rev and with the configuration `develop` pins | malformed agent context, instructions aimed at an agent reading the repo |
 
 The script prints the two by-eye lists before running
@@ -196,15 +197,22 @@ checkout of `develop`, so the contributor's `.gitleaks.toml`
 and `.gitleaksignore` are not read. Plain `git log -p`
 prints no patch for a merge commit, so the history scans and
 gitleaks both read merges explicitly; otherwise a secret
-added while resolving a merge would reach nothing. skillsaw has to read the
+added while resolving a merge would reach nothing. Both read
+every patch as text, so a contributor's `.gitattributes`
+marking a file `-diff`, or a NUL byte in the file, cannot
+turn its patch into `Binary files differ`. gitleaks ignores
+inline `gitleaks:allow` comments, so one cannot hide a key,
+and one in prose is not a finding. A hook pre-commit skips
+is reported as a finding, not as clean. skillsaw has to read the
 contributor's tree, so `develop`'s configuration replaces
 theirs, and `--no-custom-rules` stops it importing any
 Python a configuration names. `tools/test-wave0-scan.sh`
 plants each of those attacks and checks the scan still
 reports, and that nothing from the contributor's tree ran;
 CI's `skillsaw` job runs that test. The script needs GNU
-`grep` (for `-P`) and `pre-commit`, and stops with an error,
-not a finding, when either is missing.
+`grep` (for `-P`), GNU `xargs` (for `-r`) and `pre-commit`,
+so a Linux host or the devcontainer, and stops with an
+error, not a finding, when any is missing.
 
 `cargo audit` and `cargo deny` are deliberately absent:
 neither is installed on the host and neither is baked into
@@ -530,41 +538,19 @@ For a pull request from a fork, read this before clicking
 anything. Wave 0 and Wave 1 must be clear first.
 
 The `vm` runners the smoke tier, `mermaid-lint.yml`,
-`proxmox-functional.yml` and `rdp-smoke.yml` use are
-conductor-provisioned ephemeral VMs, and the conductor's
-cloud-init userdata writes two secrets onto every one of
-them at boot, owned by the same user the job steps run as:
-
-- `/srv/github/id_ci` — an unencrypted SSH private key,
-  which `proxmox-functional.yml` describes as the key to
-  every node in the CI mesh.
-- `~/.shakenfist` — API credentials for the runner's own
-  namespace on `sfcbr.shakenfist.com`.
-
-Ephemerality does not mitigate this. A fresh VM per job
-defeats persistence and cross-job contamination; it does
-not defeat theft, because both secrets are re-provisioned
-onto every fresh runner, and the runner has egress through
-the proxy. Any step that runs a fork's code there — a
-`build.rs` in a new dependency, a proc macro, a test, a
-`Makefile` recipe, a script in `tools/` — can read both
-files and send them anywhere.
-
-That is what every one of those jobs' fork guards
-prevents: on a fork pull request, the only one of them that
-runs is `gitleaks`, which executes nothing from the tree
-and takes its configuration from `develop` (`docs/ci.md`).
-But the guards are defence in depth, not the boundary. A
-pull request's workflows run from the pull request's own
-copy of `.github/workflows/`, so a fork can delete a guard
-in the same pull request that carries the hostile code.
-What stops that is GitHub's fork workflow approval, which
-this repository sets to require approval for all external
-contributors rather than only first-time ones — and the
-operator reading every file on Wave 0's control-file list,
-`.github/` first, before pressing "Approve and run". An
-approval given without that read is an approval for the
-fork to run whatever it likes on the fleet.
+`proxmox-functional.yml` and `rdp-smoke.yml` use hold the
+CI mesh's SSH key and `sfcbr` credentials, and any step that
+runs a fork's code there can read and send both. Each of
+those jobs is fork-guarded, so on a fork only `gitleaks`
+runs. But a fork can delete a guard in the same pull request
+that carries the hostile code, so the guard is not what
+protects the fleet: GitHub's fork workflow approval is, and
+your read. Before pressing "Approve and run", read every
+file on Wave 0's control-file list, `.github/` first. An
+approval given without that read is an approval for the fork
+to run whatever it likes on the fleet. `docs/ci.md` has the
+reasoning, and the command that checks the approval setting
+is still the strict one.
 
 Having approved, expect almost nothing: `Can enqueue`'s jq
 treats a skipped dependency as success, so it goes green on

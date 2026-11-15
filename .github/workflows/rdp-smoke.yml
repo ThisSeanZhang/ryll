@@ -19,7 +19,7 @@
 # credential, but its `vm` runner holds /srv/github/id_ci and
 # ~/.shakenfist regardless, and the job runs the checkout's Makefile and
 # tools/rdp-smoke/ -- and a fork reaches this lane just by editing this
-# file. ci.yml's header has the full reasoning, including why the guard
+# file. docs/ci.md has the full reasoning, including why the guard
 # is defence in depth behind GitHub's fork workflow approval.
 name: RDP smoke
 

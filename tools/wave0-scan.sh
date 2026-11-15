@@ -9,10 +9,10 @@
 # REF is only ever read -- as git history, and as a detached checkout
 # that the scanners read files from and never run anything from. A fork
 # can edit tools/, .pre-commit-config.yaml, .gitleaks.toml,
-# .gitleaksignore and .skillsaw.yaml, and a .skillsaw.yaml can name
-# Python files for skillsaw to import, so running any of those from the
-# contributor's tree would let the contributor choose what runs and what
-# passes.
+# .gitleaksignore, .skillsaw.yaml and .gitattributes, and a .skillsaw.yaml
+# can name Python files for skillsaw to import, so running any of those
+# from the contributor's tree, or reading history with its attributes,
+# would let the contributor choose what runs and what passes.
 #
 # Run it before checking out, building or approving CI on the branch.
 # Fetching the script through `git show` means the copy that runs is
@@ -25,10 +25,11 @@
 # are what decide what `make` and CI would run, and they have to be read
 # by eye before either. It then runs the scanners and summarises.
 #
-# Needs git, GNU grep (for -P), pre-commit, and network access the
-# first time pre-commit builds the gitleaks and skillsaw environments;
-# it checks for the first three before scanning, so a missing tool is a
-# usage error rather than a finding. tools/test-wave0-scan.sh pins its
+# Needs git, GNU grep (for -P) and xargs (for -r), pre-commit, and
+# network access the first time pre-commit builds the gitleaks and
+# skillsaw environments; it checks for the tools before scanning, so a
+# missing one is a usage error rather than a finding. That means a Linux
+# host or the devcontainer. tools/test-wave0-scan.sh pins its
 # behaviour, and CI's skillsaw job runs that test.
 #
 # Usage: wave0-scan.sh REF
@@ -50,6 +51,7 @@ die() {
 command -v git >/dev/null || die "git is not installed"
 command -v pre-commit >/dev/null || die "pre-commit is not installed"
 printf 'x\n' | grep -qP 'x' 2>/dev/null || die "grep does not support -P; GNU grep is needed"
+xargs -r true </dev/null 2>/dev/null || die "xargs does not support -r; GNU xargs is needed"
 
 BASE_REF="${WAVE0_BASE:-origin/develop}"
 BASE="$(git rev-parse --verify --quiet "${BASE_REF}^{commit}")" \
@@ -83,11 +85,16 @@ echo "Scanning ${COUNT} commit(s): ${BASE_REF} (${BASE:0:12}) .. ${1} (${HEAD_SH
 # What a fork would edit to change what make or CI runs, or what a
 # scanner reports. ci.yml's header and MERGE-TEMPLATE.md's "Lane
 # changes" row point here rather than keeping lists of their own.
+# .gitattributes can mark a file -diff, which turns its patch into
+# "Binary files differ" for anything reading history in that checkout;
+# .envrc and .vscode/ run on the operator's machine when the review
+# worktree is opened in a shell with direnv or in an editor.
 CONTROL_PATHS=(
     .github/ tools/ scripts/ .devcontainer/ Makefile .cargo/
     .pre-commit-config.yaml .gitleaks.toml .gitleaksignore
     .skillsaw.yaml .skillsaw.yml .claudelint.yaml .claudelint.yml
     deny.toml clippy.toml rust-toolchain rust-toolchain.toml
+    ':(glob)**/.gitattributes' .gitmodules .envrc .vscode/
 )
 BUILD_PATHS=(':(glob)**/build.rs' ':(glob)**/Cargo.toml' Cargo.lock)
 
@@ -123,7 +130,12 @@ check() {
 # neither parent's version, and not the hunks a routine merge of
 # develop brings across unchanged, which would otherwise match this
 # script's own patterns. gitleaks below needs a different option.
-git log -p --cc --format=fuller "$RANGE" > "$WORK/history"
+# --text prints every patch as text: without it, a file the
+# contributor's .gitattributes marks -diff, or one with a NUL byte in
+# it, prints as "Binary files differ" and none of its lines are read.
+git log -p --cc --text --no-textconv --no-ext-diff --format=fuller "$RANGE" \
+    > "$WORK/history" || die "cannot read the history of ${RANGE}"
+[ -s "$WORK/history" ] || die "the history of ${RANGE} is empty"
 
 BIDI_PATTERN="$(sed -n "s/^PATTERN='\(.*\)'$/\1/p" "$WORK/base/tools/check-bidi.sh")"
 [ -n "$BIDI_PATTERN" ] || die "cannot read PATTERN from ${BASE_REF}'s check-bidi.sh"
@@ -137,16 +149,14 @@ bidi_files() {
 }
 
 no_match() {
-    # grep exits 1 on no match; that is the clean case here.
-    LC_ALL=C.UTF-8 grep -nP "$1" "$WORK/history"
-    [ $? -eq 1 ]
+    # grep exits 1 on no match, the clean case; 2 is an error, not clean.
+    local rc=0
+    LC_ALL=C.UTF-8 grep -nP "$1" "$WORK/history" || rc=$?
+    [ "$rc" -eq 1 ]
 }
 
-# Prompt-injection shapes are dumb but unfoolable. gitleaks:allow is
-# here because it is an inline suppression gitleaks honours wherever it
-# appears, so no configuration of ours can stop a fork using it.
+# Prompt-injection shapes are dumb but unfoolable.
 INJECTION='(?i)ignore (all )?(previous|prior|above) (instructions|prompts)|disregard (previous|prior) (instructions|prompts)|system: *you are|you are now|new instructions:'
-SUPPRESSION='^\+.*gitleaks:allow'
 
 hook_rev() {
     awk -v repo="$1" '
@@ -170,14 +180,18 @@ echo "Using gitleaks ${GITLEAKS_REV} and skillsaw ${SKILLSAW_REV}, as ${BASE_REF
 # each merge against its first parent is a format it reads, and covers
 # everything a merge added to the branch -- including, on a merge of an
 # older develop, develop's own changes, so a finding attributed to a
-# merge commit may be one develop already carries.
+# merge commit may be one develop already carries. An inline
+# gitleaks:allow silences the finding on its line whatever the
+# configuration says, so --ignore-gitleaks-allow turns it off: a
+# contributor's allow comment cannot hide a key, and one in prose, with
+# no key on its line, is not a finding. --text is as for the history.
 cat > "$WORK/pre-commit.yaml" <<EOF
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: ${GITLEAKS_REV}
     hooks:
       - id: gitleaks
-        entry: gitleaks git --redact --verbose --no-banner '--log-opts=--diff-merges=first-parent ${RANGE}'
+        entry: gitleaks git --redact --verbose --no-banner --ignore-gitleaks-allow '--log-opts=--text --diff-merges=first-parent ${RANGE}'
   - repo: https://github.com/stbenjam/skillsaw
     rev: ${SKILLSAW_REV}
     hooks:
@@ -185,10 +199,24 @@ repos:
         entry: skillsaw lint --no-custom-rules
 EOF
 
+run_hook() {
+    # pre-commit exits 0 for a hook it skipped because no file matched,
+    # which would read here as a clean scan of nothing. Only its Passed
+    # line says the hook ran.
+    local out rc=0
+    out="$(pre-commit run -c "$WORK/pre-commit.yaml" "$1" --all-files 2>&1)" || rc=$?
+    printf '%s\n' "$out"
+    [ "$rc" -eq 0 ] || return 1
+    if ! grep -q 'Passed$' <<<"$out"; then
+        echo "wave0-scan: pre-commit did not run $1, so it scanned nothing"
+        return 1
+    fi
+}
+
 gitleaks_range() {
-    # Run from BASE's checkout, so gitleaks reads BASE's .gitleaks.toml
-    # and .gitleaksignore rather than the contributor's.
-    (cd "$WORK/base" && pre-commit run -c "$WORK/pre-commit.yaml" gitleaks --all-files)
+    # Run from BASE's checkout, so gitleaks reads BASE's .gitleaks.toml,
+    # .gitleaksignore and .gitattributes rather than the contributor's.
+    (cd "$WORK/base" && run_hook gitleaks)
 }
 
 skillsaw_tree() {
@@ -206,13 +234,12 @@ skillsaw_tree() {
             cp "$WORK/base/$f" "$WORK/pr/$f"
         fi
     done
-    (cd "$WORK/pr" && pre-commit run -c "$WORK/pre-commit.yaml" skillsaw --all-files)
+    (cd "$WORK/pr" && run_hook skillsaw)
 }
 
 check "Unicode controls in changed files (check-bidi.sh)" bidi_files
 check "Unicode controls in messages and patches" no_match "$BIDI_PATTERN"
 check "Prompt-injection shapes" no_match "$INJECTION"
-check "Inline gitleaks suppressions" no_match "$SUPPRESSION"
 check "Credentials (gitleaks)" gitleaks_range
 check "Agent context (skillsaw)" skillsaw_tree
 

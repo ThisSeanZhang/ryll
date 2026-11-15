@@ -65,14 +65,28 @@ so it is both safe to run and the one CI signal a fork pull request
 still gets. It does read its configuration from the tree it scans, so
 on a fork pull request `.gitleaks.toml` and `.gitleaksignore` are first
 replaced with the base branch's; a fork that needs an ignore entry has
-to have it added on `develop`. That swap leaves two ways round it,
-which a fork pull request's `gitleaks` job checks as well. An inline
-`gitleaks:allow` comment silences the finding on its line whatever the
-configuration says, so a fork pull request that adds one fails. And
-`git log -p`, which gitleaks reads, prints no patch for a merge commit,
-so content that exists only in a merge resolution would reach no scan;
-gitleaks is run a second time over the pull request's commits with
-each merge diffed against its first parent.
+to have it added on `develop`. That swap leaves three other ways to
+hide a credential, so a fork pull request's `gitleaks` job scans the
+pull request's own commits a second time with each one closed:
+
+- An inline `gitleaks:allow` comment silences the finding on its line
+  whatever the configuration says. The second scan reads every file
+  through a textconv that renames the comment, so it suppresses
+  nothing, and prose that only mentions it, with no credential on the
+  line, is still not a finding. (Debian's gitleaks 8.16 has no
+  `--ignore-gitleaks-allow`; `tools/wave0-scan.sh` uses that flag.)
+- A `.gitattributes` marking a file `-diff`, or a NUL byte in the
+  file, makes `git log -p` print `Binary files differ` instead of its
+  patch. The textconv is attached in `.git/info/attributes`, which
+  outranks every `.gitattributes`, and git diffs a file with a
+  textconv as text.
+- `git log -p` prints no patch for a merge commit, so content that
+  exists only in a merge resolution would reach no scan. The second
+  scan diffs each merge against its first parent.
+
+The range starts at the merge ref's first parent rather than the
+event's `base.sha`, which is stale when a run is repeated after
+`develop` has moved.
 
 `Check paths` and the three gates are unguarded too, because they run
 nothing from the tree: `Check paths` checks out only on `merge_group`,
