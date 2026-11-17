@@ -25,6 +25,10 @@
       "sha": "7a223bb8c7f0875f3ecee14f61b63dee6c1338b2",
       "date": "2026-08-24"
     },
+    ".github/workflows/ci.yml": {
+      "sha": "47f0609cbc32d52ebf3f2bde2532e421a87cf17f",
+      "date": "2026-11-18"
+    },
     ".github/workflows/codeql-analysis.yml": {
       "sha": "975f656d8135aefe12ba2f2094d8671460ef1a8a",
       "date": "2026-10-05"
@@ -60,6 +64,18 @@
     ".github/workflows/prune-reviews.yml": {
       "sha": "0c0cfe362b24e6bc67ccf1ddd09dacc722a0524f",
       "date": "2026-11-03"
+    },
+    ".github/workflows/rdp-smoke.yml": {
+      "sha": "9379254e5fb85125db0a79711e5cabcbee1a16c5",
+      "date": "2026-11-18"
+    },
+    ".github/workflows/release.yml": {
+      "sha": "acc257119b9664fbfcc95e583349dc949a6d65f5",
+      "date": "2026-11-18"
+    },
+    ".github/workflows/renovate.yml": {
+      "sha": "feb7442ffb3ba1896db9b35cc91ed5591d02e809",
+      "date": "2026-11-18"
     },
     ".github/workflows/supply-chain.yml": {
       "sha": "c855b8e116194dc365244a69aff28900f33023fe",
