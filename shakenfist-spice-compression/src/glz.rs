@@ -420,14 +420,16 @@ pub async fn decompress_glz(data: &[u8], dictionary: &GlzDictionary) -> Result<D
                 }
             } else {
                 // Copy from a previous image in the dictionary.
-                // Clone the referenced pixels while holding the lock,
-                // then drop the lock before copying into output.
+                // Share ownership while holding the lock, then drop
+                // the lock before copying this fragment into output.
+                // Cloning the full source image here makes fragmented
+                // references cost one full image copy per fragment.
                 let source_id = image_id.wrapping_sub(image_dist);
 
                 // Try an immediate lookup first (common case).
                 let prev_pixels = {
                     let mut dict = dictionary.images.lock().expect("lock poisoned");
-                    dict.get(&source_id).cloned()
+                    dict.get_shared(&source_id)
                 };
 
                 let prev_pixels = match prev_pixels {
@@ -475,8 +477,8 @@ pub async fn decompress_glz(data: &[u8], dictionary: &GlzDictionary) -> Result<D
                             {
                                 Ok(()) => {
                                     let mut dict = dictionary.images.lock().expect("lock poisoned");
-                                    if let Some(pixels) = dict.get(&source_id) {
-                                        resolved = Some(pixels.clone());
+                                    if let Some(pixels) = dict.get_shared(&source_id) {
+                                        resolved = Some(pixels);
                                         break;
                                     }
                                     // Notification was for a different image;
@@ -547,6 +549,89 @@ pub async fn decompress_glz(data: &[u8], dictionary: &GlzDictionary) -> Result<D
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repeated two-pixel references with changing source images and
+    /// offsets exercise the same source allocations across many fragments.
+    fn fragmented_cross_ref_image() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+        let first: Vec<u8> = (0..8).flat_map(|pixel| [pixel, 31, 63, 255]).collect();
+        let second: Vec<u8> = (0..8).flat_map(|pixel| [127, pixel, 191, 255]).collect();
+        let mut data = Vec::new();
+        data.extend_from_slice(GLZ_MAGIC);
+        data.extend_from_slice(&[0, 1, 0, 1, 0x18]); // GLZ 1.1, RGB32, top down
+        data.extend_from_slice(&256u32.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&1024u32.to_be_bytes());
+        data.extend_from_slice(&9u64.to_be_bytes());
+        data.extend_from_slice(&2u32.to_be_bytes());
+        let mut expected = Vec::new();
+        for fragment in 0..128u8 {
+            let offset = (fragment % 4) * 2;
+            let distance = if fragment % 2 == 0 { 2 } else { 1 };
+            data.extend_from_slice(&[0x40 | offset, 0, distance]);
+            let source = if distance == 2 { &first } else { &second };
+            let start = usize::from(offset) * 4;
+            expected.extend_from_slice(&source[start..start + 8]);
+        }
+        (data, first, second, expected)
+    }
+
+    #[test]
+    fn fragmented_cross_references_decode_exact_pixels() {
+        let (data, first, second, expected) = fragmented_cross_ref_image();
+        let dict = GlzDictionary::with_cap(1024);
+        dict.insert(7, first);
+        dict.insert(8, second);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let image = rt.block_on(decompress_glz(&data, &dict)).unwrap();
+
+        assert_eq!(image.pixels, expected);
+        assert_eq!((image.width, image.height), (256, 1));
+        assert_eq!(dict.total_bytes(), 64);
+        assert_eq!(dict.image_ids(), vec![7, 8]);
+    }
+
+    #[test]
+    fn waiting_cross_reference_decodes_after_source_insertion() {
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+
+        let (data, first, second, expected) = fragmented_cross_ref_image();
+        let dict = GlzDictionary::with_cap(1024);
+        dict.insert(8, second);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut decode = Box::pin(decompress_glz(&data, &dict));
+            // Poll once to register the missing-image notification. This
+            // guarantees the wait path is exercised without timing sleeps.
+            poll_fn(|cx| {
+                assert!(decode.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            dict.insert(7, first);
+            assert_eq!(decode.await.unwrap().pixels, expected);
+        });
+    }
+
+    #[test]
+    fn shared_source_survives_dictionary_window_invalidation() {
+        use std::sync::Arc;
+
+        let dict = GlzDictionary::with_cap(1024);
+        dict.insert(7, vec![19; 256]);
+        dict.insert(8, vec![29; 256]);
+        let source = dict.images.lock().unwrap().get_shared(&7).unwrap();
+        let lifetime = Arc::downgrade(&source);
+
+        assert_eq!(dict.evict_older_than(8), 1);
+        assert_eq!(dict.total_bytes(), 256);
+        assert_eq!(dict.image_ids(), vec![8]);
+        assert!(!dict.was_evicted(7));
+        assert_eq!(dict.evictions_total(), 0);
+        assert_eq!(&**source, &[19; 256]);
+        drop(source);
+        assert!(lifetime.upgrade().is_none());
+    }
 
     #[test]
     fn glz_absurd_dimensions_refused_before_allocation() {
