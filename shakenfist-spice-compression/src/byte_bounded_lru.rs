@@ -745,7 +745,7 @@ mod entry_cap_tests {
             outcome,
             InsertOutcome::InsertedAfterEviction {
                 evicted: 1,
-                freed_bytes: 10
+                freed_bytes: 10,
             },
         );
         assert_eq!(evicted_keys, vec![1]);

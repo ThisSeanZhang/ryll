@@ -75,24 +75,6 @@ dict.insert(image.image_id, image.pixels.clone());
 # Ok::<(), anyhow::Error>(())
 ```
 
-## GLZ reference benchmark
-
-From the workspace root, run:
-
-```sh
-cargo run --release -p shakenfist-spice-compression --no-default-features --features glz --example glz_references
-```
-
-The example checks decoded pixels before timing 1920×1080 images with
-one or 128 references to a cached image. It reports elapsed decode time,
-not remote-session frame rate, and has no timing threshold for CI.
-Use the same example and build profile when comparing revisions.
-
-Dictionary lookups share the source pixel allocation while copying
-each reference fragment. The byte cap counts cache-owned pixels; an
-in-progress fragment can keep an evicted source alive until its copy
-finishes. Public dictionary and cache APIs remain unchanged.
-
 ## Source
 
 Extracted from the

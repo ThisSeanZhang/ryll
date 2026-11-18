@@ -419,11 +419,8 @@ pub async fn decompress_glz(data: &[u8], dictionary: &GlzDictionary) -> Result<D
                     }
                 }
             } else {
-                // Copy from a previous image in the dictionary.
-                // Share ownership while holding the lock, then drop
-                // the lock before copying this fragment into output.
-                // Cloning the full source image here makes fragmented
-                // references cost one full image copy per fragment.
+                // Sharing the Arc avoids copying the whole source image for each
+                // fragment. The dictionary lock is released before the pixel copy.
                 let source_id = image_id.wrapping_sub(image_dist);
 
                 // Try an immediate lookup first (common case).
@@ -520,10 +517,12 @@ pub async fn decompress_glz(data: &[u8], dictionary: &GlzDictionary) -> Result<D
                     // pixels in bulk, preserving clipping at either boundary.
                     let pixels = length
                         .min(source.len() / 4)
-                        .min((output_size - out_idx) / 4);
+                        .min(output_size.saturating_sub(out_idx) / 4);
                     let bytes = pixels * 4;
-                    output[out_idx..out_idx + bytes].copy_from_slice(&source[..bytes]);
-                    out_idx += bytes;
+                    if bytes > 0 {
+                        output[out_idx..out_idx + bytes].copy_from_slice(&source[..bytes]);
+                        out_idx += bytes;
+                    }
                 }
             }
         }

@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()?;
-    // Non-uniform RGBA pixels expose incorrect offsets and channel ordering.
+    // Non-uniform RGBA pixels expose incorrect reference offsets.
     let expected: Vec<u8> = (0..WIDTH * HEIGHT)
         .flat_map(|pixel| [pixel as u8, (pixel >> 8) as u8, (pixel % 251) as u8, 255])
         .collect();
