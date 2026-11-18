@@ -515,17 +515,15 @@ pub async fn decompress_glz(data: &[u8], dictionary: &GlzDictionary) -> Result<D
                     length,
                     prev_pixels.len()
                 );
-                let mut pi_idx = pixel_offset * 4;
-                for _ in 0..length {
-                    if out_idx + 4 > output_size || pi_idx + 4 > prev_pixels.len() {
-                        break;
-                    }
-                    output[out_idx] = prev_pixels[pi_idx];
-                    output[out_idx + 1] = prev_pixels[pi_idx + 1];
-                    output[out_idx + 2] = prev_pixels[pi_idx + 2];
-                    output[out_idx + 3] = prev_pixels[pi_idx + 3];
-                    out_idx += 4;
-                    pi_idx += 4;
+                if let Some(source) = prev_pixels.get(pixel_offset * 4..) {
+                    // Source and destination are separate images. Copy whole
+                    // pixels in bulk, preserving clipping at either boundary.
+                    let pixels = length
+                        .min(source.len() / 4)
+                        .min((output_size - out_idx) / 4);
+                    let bytes = pixels * 4;
+                    output[out_idx..out_idx + bytes].copy_from_slice(&source[..bytes]);
+                    out_idx += bytes;
                 }
             }
         }
@@ -631,6 +629,85 @@ mod tests {
         assert_eq!(&**source, &[19; 256]);
         drop(source);
         assert!(lifetime.upgrade().is_none());
+    }
+
+    fn glz_rgb32_row(width: u32, payload: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(GLZ_MAGIC);
+        data.extend_from_slice(&[0, 1, 0, 1, 0x18]); // GLZ 1.1, top-down RGB32
+        for value in [width, 1, width * 4] {
+            data.extend_from_slice(&value.to_be_bytes());
+        }
+        data.extend_from_slice(&1u64.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(payload);
+        data
+    }
+
+    #[test]
+    fn cross_reference_copies_only_complete_pixels_within_both_buffers() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        for source_len in 1..=19u8 {
+            let source: Vec<u8> = (1..=source_len).collect();
+            let dict = GlzDictionary::with_cap(1024);
+            dict.insert(0, source.clone());
+            for width in 1..=5u32 {
+                for offset in 0..=5u8 {
+                    for length in 2..=6u8 {
+                        let payload = [(length << 5) | offset, 0, 1];
+                        let data = glz_rgb32_row(width, &payload);
+                        let image = rt.block_on(decompress_glz(&data, &dict)).unwrap();
+                        let mut expected: Vec<u8> = source
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .skip(usize::from(offset))
+                            .take(usize::from(length))
+                            .take(width as usize)
+                            .flatten()
+                            .copied()
+                            .collect();
+                        expected.resize(width as usize * 4, 0);
+                        assert_eq!(
+                            image.pixels, expected,
+                            "source_len={source_len}, width={width}, offset={offset}, length={length}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_cross_reference_leaves_next_literal_at_actual_copy_end() {
+        let dict = GlzDictionary::with_cap(1024);
+        dict.insert(0, vec![1, 2, 3, 4, 5, 6, 7, 8, 0xaa, 0xbb]);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        for (reference, mut expected) in [
+            (vec![0x81, 0, 1], vec![5, 6, 7, 8]), // One complete pixel remains.
+            (vec![0x82, 0, 1], vec![]),           // Only an incomplete pixel remains.
+            (vec![0x8f, 0, 1], vec![]),           // Offset beyond the source.
+            (vec![0x5f, 0xff, 0x7f, 1, 0xff], vec![]), // Maximum extended offset.
+        ] {
+            let mut payload = reference.clone();
+            payload.extend_from_slice(&[0, 9, 10, 11]); // One literal BGR pixel.
+            expected.extend_from_slice(&[11, 10, 9, 255]);
+            expected.resize(12, 0);
+            let data = glz_rgb32_row(3, &payload);
+            let image = rt.block_on(decompress_glz(&data, &dict)).unwrap();
+            assert_eq!(image.pixels, expected, "reference={reference:?}");
+        }
+    }
+
+    #[test]
+    fn self_reference_expands_overlapping_pixel_pattern() {
+        let data = glz_rgb32_row(8, &[1, 1, 2, 3, 4, 5, 6, 0xc1, 0, 0]);
+        let dict = GlzDictionary::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let image = rt.block_on(decompress_glz(&data, &dict)).unwrap();
+        // Two literal pixels followed by six pixels at distance two. Later
+        // pixels in the reference read pixels written earlier in the same run.
+        assert_eq!(image.pixels, [3, 2, 1, 255, 6, 5, 4, 255].repeat(4));
     }
 
     #[test]
