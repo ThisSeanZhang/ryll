@@ -25,6 +25,10 @@
       "sha": "7a223bb8c7f0875f3ecee14f61b63dee6c1338b2",
       "date": "2026-08-24"
     },
+    ".github/workflows/ci.yml": {
+      "sha": "47f0609cbc32d52ebf3f2bde2532e421a87cf17f",
+      "date": "2026-11-18"
+    },
     ".github/workflows/codeql-analysis.yml": {
       "sha": "975f656d8135aefe12ba2f2094d8671460ef1a8a",
       "date": "2026-10-05"
@@ -60,6 +64,18 @@
     ".github/workflows/prune-reviews.yml": {
       "sha": "0c0cfe362b24e6bc67ccf1ddd09dacc722a0524f",
       "date": "2026-11-03"
+    },
+    ".github/workflows/rdp-smoke.yml": {
+      "sha": "9379254e5fb85125db0a79711e5cabcbee1a16c5",
+      "date": "2026-11-18"
+    },
+    ".github/workflows/release.yml": {
+      "sha": "acc257119b9664fbfcc95e583349dc949a6d65f5",
+      "date": "2026-11-18"
+    },
+    ".github/workflows/renovate.yml": {
+      "sha": "feb7442ffb3ba1896db9b35cc91ed5591d02e809",
+      "date": "2026-11-18"
     },
     ".github/workflows/supply-chain.yml": {
       "sha": "c855b8e116194dc365244a69aff28900f33023fe",
@@ -101,9 +117,41 @@
       "sha": "154626ef4e81f6aa3e7c271ef613fe017ad658f9",
       "date": "2026-09-23"
     },
+    "docs/channel-diagnostics-audit.md": {
+      "sha": "7599137fd333be94375e64ee9b21dc8d961b3141",
+      "date": "2026-11-18"
+    },
+    "docs/ci.md": {
+      "sha": "6e51a7ce45dfd561fbcdb4504011cc4a9770979f",
+      "date": "2026-11-18"
+    },
+    "docs/configuration.md": {
+      "sha": "a2653c7bd1f821e3e429b5189bb43daaad22804b",
+      "date": "2026-11-18"
+    },
+    "docs/control-socket-protocol.md": {
+      "sha": "bfc707b33ae610c7e59d2b406be8809c6811b406",
+      "date": "2026-11-18"
+    },
+    "docs/design-decisions.md": {
+      "sha": "16491037251ab1a105b27a29dba0e17d80fa22e4",
+      "date": "2026-11-18"
+    },
     "docs/development-macos.md": {
       "sha": "9fef25179d5ec56bb52e4a5b5edeecadcff74097",
       "date": "2026-09-17"
+    },
+    "docs/development.md": {
+      "sha": "4744b19fbefc09760d8f77e6bbbeda8a77e1bc60",
+      "date": "2026-11-18"
+    },
+    "docs/device-redirection.md": {
+      "sha": "818d3b0f56987db3b172ecb462f1ca9d6aaa2332",
+      "date": "2026-11-18"
+    },
+    "docs/diagnostics.md": {
+      "sha": "98ec3ca5b9637553afa52e34c3ed8e6bd42a51dd",
+      "date": "2026-11-18"
     },
     "docs/features.md": {
       "sha": "169359dcd7d5b54e0fd0b3dbcaff58499683e39f",
