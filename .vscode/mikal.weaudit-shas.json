@@ -117,9 +117,41 @@
       "sha": "154626ef4e81f6aa3e7c271ef613fe017ad658f9",
       "date": "2026-09-23"
     },
+    "docs/channel-diagnostics-audit.md": {
+      "sha": "7599137fd333be94375e64ee9b21dc8d961b3141",
+      "date": "2026-11-18"
+    },
+    "docs/ci.md": {
+      "sha": "6e51a7ce45dfd561fbcdb4504011cc4a9770979f",
+      "date": "2026-11-18"
+    },
+    "docs/configuration.md": {
+      "sha": "a2653c7bd1f821e3e429b5189bb43daaad22804b",
+      "date": "2026-11-18"
+    },
+    "docs/control-socket-protocol.md": {
+      "sha": "bfc707b33ae610c7e59d2b406be8809c6811b406",
+      "date": "2026-11-18"
+    },
+    "docs/design-decisions.md": {
+      "sha": "16491037251ab1a105b27a29dba0e17d80fa22e4",
+      "date": "2026-11-18"
+    },
     "docs/development-macos.md": {
       "sha": "9fef25179d5ec56bb52e4a5b5edeecadcff74097",
       "date": "2026-09-17"
+    },
+    "docs/development.md": {
+      "sha": "4744b19fbefc09760d8f77e6bbbeda8a77e1bc60",
+      "date": "2026-11-18"
+    },
+    "docs/device-redirection.md": {
+      "sha": "818d3b0f56987db3b172ecb462f1ca9d6aaa2332",
+      "date": "2026-11-18"
+    },
+    "docs/diagnostics.md": {
+      "sha": "98ec3ca5b9637553afa52e34c3ed8e6bd42a51dd",
+      "date": "2026-11-18"
     },
     "docs/features.md": {
       "sha": "169359dcd7d5b54e0fd0b3dbcaff58499683e39f",
